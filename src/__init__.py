@@ -1,0 +1,1 @@
+# VladgeMinifier package init

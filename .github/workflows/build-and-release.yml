@@ -1,0 +1,53 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*' # Trigger on version tags, e.g., v1.0.0
+
+jobs:
+  build:
+    name: Build Windows Executables
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller pytest
+          
+      - name: Run Tests
+        run: |
+          python -m pytest tests/ -v
+          
+      - name: Build Executables
+        run: |
+          .\build.bat
+          
+      - name: Create Zip Archive
+        run: |
+          powershell -Command "Compress-Archive -Path _export\VladgeMinifier\* -DestinationPath dist\VladgeMinifier-${{ github.ref_name }}.zip"
+          
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            dist/VladgeMinifier-${{ github.ref_name }}.zip
+            dist/VladgeMinifier_Standalone.exe
+          name: VladgeMinifier ${{ github.ref_name }}
+          body: "Automated release of VladgeMinifier ${{ github.ref_name }}."
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
