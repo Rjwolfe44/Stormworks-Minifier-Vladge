@@ -63,9 +63,6 @@ mkdir _export
 :: Copy the shared distribution folder
 xcopy /s /q /i "dist\VladgeMinifier_Export" "_export\VladgeMinifier"
 
-:: Copy the standalone onefile GUI alternative
-copy /y "dist\VladgeMinifier_Standalone.exe" "_export\VladgeMinifier_Standalone.exe"
-
 echo.
 echo  =========================================
 echo   Build Complete!

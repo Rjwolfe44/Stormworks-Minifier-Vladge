@@ -172,6 +172,45 @@ class TestFloorNotRewritten:
         assert "(3.7)//1" not in result
 
 
+class TestInlineLiteralMethodCall:
+    """Bare string/number literals are not prefixexps — need parens before : . ["""
+
+    def test_string_sub_needs_parens_l4(self):
+        src = 'function onTick() local s="hello" local t=s:sub(1,2) end'
+        result, stats = minify(src, level=4)
+        assert '"hello":sub' not in result
+        assert '("hello"):sub' in result or "('hello'):sub" in result
+        from luaparser import ast
+        ast.parse(result)
+        assert stats.semantic_ok, stats.semantic_errors
+
+    def test_string_sub_with_len_l4(self):
+        src = (
+            'function onTick()\n'
+            '  local s="hello world"\n'
+            '  output.setNumber(1, #s:sub(1,3))\n'
+            'end'
+        )
+        result, stats = minify(src, level=4)
+        assert '#"hello world":sub' not in result
+        from luaparser import ast
+        ast.parse(result)
+        assert stats.semantic_ok, stats.semantic_errors
+
+    def test_string_index_needs_parens_l4(self):
+        src = (
+            'function onTick()\n'
+            '  local s="ab"\n'
+            '  output.setNumber(1, s[1] or 0)\n'
+            'end'
+        )
+        result, stats = minify(src, level=4)
+        assert '"ab"[1]' not in result
+        assert '("ab")[1]' in result or "('ab')[1]" in result
+        from luaparser import ast
+        ast.parse(result)
+
+
 class TestSemanticValidator:
     def test_clean_script_passes(self):
         result, stats = minify(WHILE_SORT_FIXTURE, level=2)

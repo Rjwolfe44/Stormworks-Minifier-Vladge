@@ -13,7 +13,6 @@ import threading
 import time
 from pathlib import Path
 from tkinter import filedialog
-import shutil
 import json
 import tkinter as tk
 from PIL import Image
@@ -28,6 +27,11 @@ except ImportError:
 
 from src.gui.watcher import MinifierFileWatcher
 from src.gui.discord_rpc import DiscordRPC
+from src.gui.editor_install import (
+    format_install_success_message,
+    install_editor_integration,
+    resolve_cli_path,
+)
 
 def get_base_path() -> Path:
     """
@@ -864,134 +868,78 @@ class VladgeMinifierApp(_BaseApp):
         threading.Thread(target=_worker, daemon=True).start()
 
     def _install_to_editor(self):
-        # 1. Ask for folder
         folder = filedialog.askdirectory(title="Select your Stormworks code folder")
         if not folder:
             return
-            
+
         folder_path = Path(folder)
-        
-        # 2. Ask for default minification level
+
         level_win = ctk.CTkToplevel(self)
-        level_win.title("Select Default Level")
-        level_win.geometry("400x250")
+        level_win.title("Install to Editor")
+        level_win.geometry("460x300")
         level_win.configure(fg_color=T.BG_PANEL)
         level_win.transient(self)
         level_win.grab_set()
-        
+
         ctk.CTkLabel(
-            level_win, 
-            text="Choose default minification level for this project:",
+            level_win,
+            text="Default Ctrl+Alt+M preset (paste to clipboard):",
             font=T.FONT_BODY,
-            text_color=T.TEXT_PRIMARY
+            text_color=T.TEXT_PRIMARY,
         ).pack(pady=(20, 10))
-        
+
         level_var = ctk.IntVar(value=self._minify_level.get())
-        
+
         combo = ctk.CTkComboBox(
             level_win,
             values=["1 - Strip Only", "2 - Standard", "3 - Aggressive", "4 - Ultimate"],
             font=T.FONT_BODY,
-            width=250
+            width=280,
         )
-        # Select current level
         combo.set(combo.cget("values")[level_var.get() - 1])
         combo.pack(pady=10)
-        
+
+        ctk.CTkLabel(
+            level_win,
+            text="Re-run on existing projects to migrate old tasks\n"
+                 "and remove broken CLI copies from .vscode/",
+            font=T.FONT_SMALL,
+            text_color=T.TEXT_SECONDARY,
+            justify="center",
+        ).pack(pady=(0, 6))
+
         def _confirm_install():
             try:
-                # Parse level from combo box (e.g. "5 - Singularity" -> 5)
                 selected_level = int(combo.get().split(" - ")[0])
-                
-                vscode_dir = folder_path / ".vscode"
-                vscode_dir.mkdir(exist_ok=True)
-                
-                # Copy CLI
-                # Assume vladgeminifier-cli.exe is in the same directory as this GUI
-                cli_source = Path(sys.executable).parent / "vladgeminifier-cli.exe"
-                
-                if not cli_source.exists():
-                    # If running from source during dev
-                    cli_source = Path(__file__).parent.parent.parent / "dist" / "vladgeminifier-cli.exe"
-                    
-                if not cli_source.exists():
-                    self._show_error("Could not find vladgeminifier-cli.exe to install!")
+                cli_path = resolve_cli_path()
+                if cli_path is None:
+                    self._show_error(
+                        "Could not find vladgeminifier-cli.exe.\n\n"
+                        "Run VladgeMinifier from the full install folder\n"
+                        "(VladgeMinifier.exe + vladgeminifier-cli.exe)."
+                    )
                     level_win.destroy()
                     return
-                    
-                cli_dest = vscode_dir / "vladgeminifier-cli.exe"
-                shutil.copy2(cli_source, cli_dest)
-                
-                # Write tasks.json
-                tasks_path = vscode_dir / "tasks.json"
-                
-                # Read existing or create new
-                tasks_data = {
-                    "version": "2.0.0",
-                    "tasks": []
-                }
-                
-                if tasks_path.exists():
-                    try:
-                        with open(tasks_path, "r", encoding="utf-8") as f:
-                            tasks_data = json.load(f)
-                    except Exception:
-                        pass # Overwrite if corrupt
-                        
-                # Remove old minifier tasks if they exist
-                if "tasks" not in tasks_data:
-                    tasks_data["tasks"] = []
-                    
-                tasks_data["tasks"] = [t for t in tasks_data["tasks"] if t.get("label") != "Minify Current Lua File"]
-                
-                # Add the minifier task
-                tasks_data["tasks"].append({
-                    "label": "Minify Current Lua File",
-                    "type": "process",
-                    "command": "${workspaceFolder}/.vscode/vladgeminifier-cli.exe",
-                    "args": [
-                        "${file}",
-                        "--level", str(selected_level)
-                    ],
-                    "group": {
-                        "kind": "build",
-                        "isDefault": True
-                    },
-                    "presentation": {
-                        "reveal": "always",
-                        "panel": "new"
-                    },
-                    "problemMatcher": []
-                })
-                
-                with open(tasks_path, "w", encoding="utf-8") as f:
-                    json.dump(tasks_data, f, indent=4)
-                    
-                level_win.destroy()
-                
-                # Help info
-                msg = (
-                    f"✓ Installed successfully to {folder_path.name}!\n\n"
-                    f"HOW TO USE:\n"
-                    f"1. Open the project folder in VS Code or Cursor.\n"
-                    f"2. Open the Lua file you want to minify.\n"
-                    f"3. Press Ctrl+Shift+B.\n"
-                    f"4. It will instantly minify and save to the _minified folder!"
+
+                result = install_editor_integration(
+                    folder_path, selected_level, cli_path,
                 )
-                self._show_toast(msg, geometry="450x260")
-                
+                level_win.destroy()
+                msg = format_install_success_message(folder_path.name, result)
+                self._show_toast(msg, geometry="480x320")
+
             except Exception as e:
                 level_win.destroy()
                 self._show_error(f"Failed to install:\n{e}")
-                
+
         ctk.CTkButton(
-            level_win, 
-            text="Install", 
+            level_win,
+            text="Install / Update",
             command=_confirm_install,
-            fg_color=T.ACCENT, 
+            fg_color=T.ACCENT,
             text_color=T.BG_DARK,
-            font=("Segoe UI", 12, "bold")
-        ).pack(pady=20)
+            font=("Segoe UI", 12, "bold"),
+        ).pack(pady=16)
 
     def _clear(self):
         self._current_file = None
@@ -1054,24 +1002,17 @@ class VladgeMinifierApp(_BaseApp):
                 if latest_ver and self._is_newer_version(APP_VERSION, latest_ver):
                     assets = data.get("assets", [])
                     download_url = None
-                    
-                    import sys
-                    from pathlib import Path
-                    running_exe = Path(sys.executable)
-                    is_standalone = "standalone" in running_exe.name.lower()
-
+                    # Zip-only releases (folder install). Never pick standalone .exe.
                     for asset in assets:
                         name = asset.get("name", "").lower()
-                        if is_standalone and name.endswith("standalone.exe"):
+                        if name.endswith(".zip") and "vladgeminifier" in name:
                             download_url = asset.get("browser_download_url")
                             break
-                        elif not is_standalone and name.endswith(".zip"):
-                            download_url = asset.get("browser_download_url")
-                            break
-
-                    if not download_url and assets:
-                        download_url = assets[0].get("browser_download_url")
-                    
+                    if not download_url:
+                        for asset in assets:
+                            if asset.get("name", "").lower().endswith(".zip"):
+                                download_url = asset.get("browser_download_url")
+                                break
                     if download_url:
                         self.after(0, lambda: self._prompt_update(latest_ver, download_url))
         except Exception as e:
@@ -1146,15 +1087,9 @@ class VladgeMinifierApp(_BaseApp):
         def _download_thread():
             try:
                 import urllib.request
-                running_exe = Path(sys.executable)
-                is_exe = running_exe.name.endswith(".exe") and not "python" in running_exe.name.lower()
-                
                 temp_dir = Path(os.environ.get("TEMP", "."))
-                ext = ".exe" if is_exe else ".zip"
-                if download_url.endswith(".zip"):
-                    ext = ".zip"
-                download_dest = temp_dir / f"VladgeMinifier_update{ext}"
-                
+                download_dest = temp_dir / "VladgeMinifier_update.zip"
+
                 req = urllib.request.Request(
                     download_url,
                     headers={'User-Agent': 'VladgeMinifier-Updater'}
@@ -1163,7 +1098,7 @@ class VladgeMinifierApp(_BaseApp):
                     total_size = int(response.headers.get('content-length', 0))
                     bytes_read = 0
                     block_size = 8192
-                    
+
                     with open(download_dest, "wb") as f:
                         while True:
                             block = response.read(block_size)
@@ -1174,40 +1109,46 @@ class VladgeMinifierApp(_BaseApp):
                             if total_size > 0:
                                 pct = bytes_read / total_size
                                 self.after(0, lambda p=pct: bar.set(p))
-                
+
                 self.after(0, lambda: lbl.configure(text="Installing update..."))
-                self.after(500, lambda: self._apply_update_and_restart(download_dest, is_exe, win))
+                self.after(500, lambda: self._apply_update_and_restart(download_dest, win))
             except Exception as e:
                 self.after(0, lambda: self._show_error(f"Download failed:\n{e}"))
                 self.after(0, win.destroy)
 
         threading.Thread(target=_download_thread, daemon=True).start()
 
-    def _apply_update_and_restart(self, download_path: Path, is_exe: bool, win_to_close: ctk.CTkToplevel):
+    def _apply_update_and_restart(self, download_path: Path, win_to_close: ctk.CTkToplevel):
         win_to_close.destroy()
         try:
             running_exe = Path(sys.executable)
-            is_real_exe = running_exe.name.endswith(".exe") and not "python" in running_exe.name.lower()
-            
+            is_real_exe = running_exe.name.endswith(".exe") and "python" not in running_exe.name.lower()
+
             if is_real_exe:
-                updater_bat = running_exe.parent / "updater.bat"
-                if download_path.name.lower().endswith(".zip"):
-                    # Extract zip to parent directory (overwriting files)
-                    script_content = f"""@echo off
+                install_dir = running_exe.parent
+                extract_dir = Path(os.environ.get("TEMP", ".")) / "VladgeMinifier_update_extract"
+                updater_bat = install_dir / "updater.bat"
+                # Flat zip (CI: VladgeMinifier\*) or nested VladgeMinifier\ folder both work.
+                script_content = f"""@echo off
+setlocal EnableDelayedExpansion
 timeout /t 2 /nobreak > nul
-powershell -Command "Expand-Archive -Path '{download_path}' -DestinationPath '{running_exe.parent}' -Force"
-start "" "{running_exe}"
-del "%~f0"
-"""
-                else:
-                    script_content = f"""@echo off
-timeout /t 2 /nobreak > nul
-move /y "{download_path}" "{running_exe}"
+if exist "{extract_dir}" rmdir /s /q "{extract_dir}"
+mkdir "{extract_dir}"
+powershell -NoProfile -Command "Expand-Archive -LiteralPath '{download_path}' -DestinationPath '{extract_dir}' -Force"
+set "SRC={extract_dir}"
+if exist "{extract_dir}\\VladgeMinifier\\VladgeMinifier.exe" set "SRC={extract_dir}\\VladgeMinifier"
+if not exist "!SRC!\\VladgeMinifier.exe" (
+  echo Update extract failed: VladgeMinifier.exe not found
+  exit /b 1
+)
+xcopy /s /y /q "!SRC!\\*" "{install_dir}\\"
+rmdir /s /q "{extract_dir}"
+del /q "{download_path}" > nul 2>&1
 start "" "{running_exe}"
 del "%~f0"
 """
                 updater_bat.write_text(script_content, encoding="utf-8")
-                
+
                 import subprocess
                 subprocess.Popen(["cmd.exe", "/c", str(updater_bat)], creationflags=subprocess.CREATE_NO_WINDOW)
                 self.destroy()

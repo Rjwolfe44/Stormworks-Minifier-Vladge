@@ -165,6 +165,7 @@ User structs **do** minify at L3+: `{ yaw = 1 }` / `obj.yaw` rename together by 
 7. **Structure packs** (`default_pack`, `vector_pack`): must pass luaparser on candidate output before applying.
 8. **L4 monotonic**: string dedup, literal dedup, peephole, smart alias must not grow output; L4 falls back to L3 if final size is larger.
 9. **Linter short-circuit**: undefined reads in dead `and` branches and falsy `or` chains are not flagged; reads inside global funcs unreachable from `onTick`/`onDraw`/… are skipped.
+10. **Constant inline before `:`, `.`, `[`**: bare string/number/`nil`/`true`/`false` literals are not Lua prefixexps. Inlining `s:sub(...)` must emit `("hello"):sub(...)`, never `"hello":sub(...)`.
 
 Regression fixtures live in `tests/test_semantic_corruption.py`, `tests/test_linter_shortcircuit.py`.
 
@@ -180,7 +181,7 @@ Regression fixtures live in `tests/test_semantic_corruption.py`, `tests/test_lin
    → GitHub Actions builds and publishes the release.
 6. Optional local: `.\build.bat` → `_export\VladgeMinifier\` (GUI + CLI). Or `python publish.py`.
 
-Releases: zip (folder with GUI + CLI) and standalone GUI exe. Autoupdater must extract zips properly (fixed in 2.2.2 era) — don’t regress that.
+Releases: zip only (folder with GUI + CLI). Autoupdater downloads the zip, extracts flat or nested `VladgeMinifier/`, and overwrites the install dir — don’t regress that. Standalone onefile exe was removed in 2.3.3+.
 
 Lifeboat benchmark: `tests/test_vs_lifeboat.py` points at a local Proton Drive Code Folder; CI may skip if missing. Overall Vladge L4 should stay ahead of Lifeboat on aggregate; `Car Guidance.lua` is a known Lifeboat DCE outlier.
 

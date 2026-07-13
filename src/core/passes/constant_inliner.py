@@ -4,10 +4,60 @@ Finds variables that are assigned exactly once to a constant literal
 or global API path, and inlines that constant everywhere.
 """
 
-from typing import List, Tuple, Dict, Set
+from typing import List, Tuple, Dict, Set, Optional
 from collections import defaultdict
 from ..lexer import Token, TT, SW_GLOBALS
 from ..scope import Scope, build_scope_tree
+
+
+def _skip_ws(tokens: List[Token], idx: int) -> int:
+    n = len(tokens)
+    while idx < n and tokens[idx].type in (TT.SPACE, TT.NEWLINE, TT.COMMENT, TT.LONGCOMMENT):
+        idx += 1
+    return idx
+
+
+def _is_name_path(val_tokens: List[Token]) -> bool:
+    """True for a bare Name or Name.Name.Name path (valid prefixexp / var)."""
+    if not val_tokens or val_tokens[0].type != TT.NAME:
+        return False
+    i = 1
+    while i < len(val_tokens):
+        if val_tokens[i].type == TT.OP and val_tokens[i].value == ".":
+            i += 1
+            if i >= len(val_tokens) or val_tokens[i].type != TT.NAME:
+                return False
+            i += 1
+            continue
+        return False
+    return True
+
+
+def _needs_inline_parens(val_tokens: List[Token], next_tok: Optional[Token]) -> bool:
+    """
+    Wrap inlined values when Lua requires a prefixexp.
+
+    Bare string/number/bool/nil literals are NOT prefixexps, so
+    ``s:sub(1,2)`` must become ``("hello"):sub(1,2)``, not ``"hello":sub(1,2)``.
+    Same for ``.`` field access and ``[]`` indexing.
+    """
+    if not val_tokens:
+        return False
+    if val_tokens[0].type == TT.OP and val_tokens[0].value == "-":
+        return True
+    if next_tok is None or next_tok.type != TT.OP or next_tok.value not in (".", ":", "["):
+        return False
+    if _is_name_path(val_tokens):
+        return False
+    if (
+        val_tokens[0].type == TT.OP
+        and val_tokens[0].value == "("
+        and val_tokens[-1].type == TT.OP
+        and val_tokens[-1].value == ")"
+    ):
+        return False
+    return True
+
 
 def inline_constants(tokens: List[Token]) -> Tuple[List[Token], int]:
     root = build_scope_tree(tokens)
@@ -350,33 +400,40 @@ def inline_constants(tokens: List[Token]) -> Tuple[List[Token], int]:
                         continue
                 
                 if not is_lhs:
+                    next_i = _skip_ws(tokens, i + 1)
+                    next_tok = tokens[next_i] if next_i < n else None
+
                     if resolved_local and id(resolved_local) in safe_locals:
                         # Inline!
                         val_tokens = safe_locals[id(resolved_local)]
-                        needs_parens = val_tokens[0].value == "-"
-                        if needs_parens: new_tokens.append(Token(TT.OP, "(", tok.pos))
+                        needs_parens = _needs_inline_parens(val_tokens, next_tok)
+                        if needs_parens:
+                            new_tokens.append(Token(TT.OP, "(", tok.pos))
                         for t in val_tokens:
                             new_tokens.append(Token(t.type, t.value, tok.pos))
-                        if needs_parens: new_tokens.append(Token(TT.OP, ")", tok.pos))
+                        if needs_parens:
+                            new_tokens.append(Token(TT.OP, ")", tok.pos))
                         inlined_count += 1
-                        
+
                         if i in scope_end:
                             s = scope_end[i]
                             if s in current_scopes:
                                 current_scopes.remove(s)
                         i += 1
                         continue
-                        
+
                     elif not resolved_local and tok.value in safe_globals:
                         # Inline!
                         val_tokens = safe_globals[tok.value]
-                        needs_parens = val_tokens[0].value == "-"
-                        if needs_parens: new_tokens.append(Token(TT.OP, "(", tok.pos))
+                        needs_parens = _needs_inline_parens(val_tokens, next_tok)
+                        if needs_parens:
+                            new_tokens.append(Token(TT.OP, "(", tok.pos))
                         for t in val_tokens:
                             new_tokens.append(Token(t.type, t.value, tok.pos))
-                        if needs_parens: new_tokens.append(Token(TT.OP, ")", tok.pos))
+                        if needs_parens:
+                            new_tokens.append(Token(TT.OP, ")", tok.pos))
                         inlined_count += 1
-                        
+
                         if i in scope_end:
                             s = scope_end[i]
                             if s in current_scopes:

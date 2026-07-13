@@ -8,6 +8,7 @@ Usage:
 Options:
   --level {1,2,3,4}     Minification level (default: 3)
   --clipboard           Copy result to clipboard
+  --no-save             Do not write an output file (use with --clipboard)
   --save <path>         Save output to file (default: _minified/<filename>)
   --deploy <dir>        Deploy the output file(s) into the specified directory
   --batch               Process all .lua files in a folder
@@ -93,7 +94,7 @@ def _batch_worker(args):
         return path, None, None, str(e)
 
 
-def process_single(input_path: Path, level: int, clipboard: bool, save: str | None, deploy: str | None, quiet: bool, obfuscate: bool, multiline: str = "off", inline_functions: bool = False, lua53_floor: bool = False):
+def process_single(input_path: Path, level: int, clipboard: bool, no_save: bool, save: str | None, deploy: str | None, quiet: bool, obfuscate: bool, multiline: str = "off", inline_functions: bool = False, lua53_floor: bool = False):
     """Process a single file."""
     result, stats = minify_file(
         str(input_path), level, obfuscate,
@@ -105,18 +106,18 @@ def process_single(input_path: Path, level: int, clipboard: bool, save: str | No
     if not quiet:
         print_stats(stats, input_path.name)
 
-    # Save to _minified subfolder by default
-    if save is None:
-        out_dir = input_path.parent / "_minified"
-        out_dir.mkdir(exist_ok=True)
-        out_path = out_dir / input_path.name
-    else:
-        out_path = Path(save)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
+    if not no_save:
+        if save is None:
+            out_dir = input_path.parent / "_minified"
+            out_dir.mkdir(exist_ok=True)
+            out_path = out_dir / input_path.name
+        else:
+            out_path = Path(save)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    out_path.write_text(result, encoding="utf-8")
-    if not quiet:
-        print(f"  {GREEN}Saved -> {out_path}{RESET}\n")
+        out_path.write_text(result, encoding="utf-8")
+        if not quiet:
+            print(f"  {GREEN}Saved -> {out_path}{RESET}\n")
 
     if deploy:
         deploy_dir = Path(deploy)
@@ -244,6 +245,8 @@ def main():
     )
     parser.add_argument("--clipboard", action="store_true",
                         help="Copy result to clipboard")
+    parser.add_argument("--no-save", action="store_true",
+                        help="Do not write an output file")
     parser.add_argument("--save", metavar="PATH",
                         help="Output path (default: _minified/<name>)")
     parser.add_argument("--deploy", metavar="DIR",
@@ -280,7 +283,7 @@ def main():
             sys.exit(1)
         if not input_path.suffix.lower() == ".lua":
             print(f"{YELLOW}Warning: {input_path} is not a .lua file{RESET}")
-        process_single(input_path, args.level, args.clipboard, args.save, args.deploy, args.quiet,
+        process_single(input_path, args.level, args.clipboard, args.no_save, args.save, args.deploy, args.quiet,
                        args.obfuscate, args.multiline, args.inline_functions, args.lua53_floor)
 
 

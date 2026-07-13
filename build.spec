@@ -22,30 +22,6 @@ gui_a = Analysis(
 
 gui_pyz = PYZ(gui_a.pure, gui_a.zipped_data, cipher=block_cipher)
 
-# Standalone GUI (Onefile)
-gui_exe_onefile = EXE(
-    gui_pyz,
-    gui_a.scripts,
-    gui_a.binaries,
-    gui_a.zipfiles,
-    gui_a.datas,
-    [],
-    name='VladgeMinifier_Standalone',
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
-    console=False,
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-    icon='src\\assets\\logo.ico',
-)
-
 # Shared Directory GUI (Onedir)
 gui_exe_onedir = EXE(
     gui_pyz,
