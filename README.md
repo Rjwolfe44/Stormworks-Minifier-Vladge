@@ -1,45 +1,152 @@
 # VladgeMinifier
 
-**Version:** 2.2.0
-**Target Engine:** Stormworks: Build and Rescue
+A Stormworks Lua minifier that actually fits the **8192** character limit — and tries hard not to break your script while doing it.
 
-VladgeMinifier is an aggressive, AST-aware Lua minification and obfuscation pipeline engineered specifically for the strict environment constraints of Stormworks. It employs multi-pass token analysis, static macro-aliasing, and a greedy slot-allocator variable renaming system to maximize logic density within the hard 8,192-character execution ceiling.
+**Current release: [v2.3.5](https://github.com/Rjwolfe44/Stormworks-Minifier-Vladge/releases/tag/v2.3.5)**
 
-## Architecture Pipeline
+<p align="center">
+  <a href="https://github.com/Rjwolfe44/Stormworks-Minifier-Vladge/releases/latest"><img alt="Download latest" src="https://img.shields.io/github/v/release/Rjwolfe44/Stormworks-Minifier-Vladge?style=for-the-badge&label=Download&color=2ea44f"></a>
+  &nbsp;
+  <a href="https://github.com/Rjwolfe44/Stormworks-Minifier-Vladge/releases/download/v2.3.5/VladgeMinifier-v2.3.5.zip"><img alt="Windows zip" src="https://img.shields.io/badge/Windows-ZIP-0A66C2?style=for-the-badge&logo=windows&logoColor=white"></a>
+</p>
 
-The minification core utilizes a deterministic, sequential pass system to aggressively reduce the byte-size footprint of your code:
-
-- **Modular Bundler & Tree Shaking**: Automatically resolves and bundles external Lua libraries using `require()` syntax. Natively traces references within exported modules, executing true AST-level tree-shaking to eliminate uncalled library functions and drastically reduce character counts.
-- **Token Lexing & Scope Analysis**: Builds a full abstract scope tree, tracking global namespaces and ensuring nested local scopes don't suffer variable shadowing collisions during the renaming phase.
-- **Smart Alias Injection**: A cost-benefit algorithm evaluates the frequency of deep API calls (e.g., `screen.drawRectF`) and dynamically hoists them into 1-character root-level aliases (e.g., `local A=screen.drawRectF`) if the byte overhead yields a net size reduction.
-- **Deduplication Pass**: Recursively identifies heavily utilized string and numeric literals and converts them into referenced constants to eliminate redundant payload bytes.
-- **Dead Code Elimination (DCE)**: Prunes unreferenced imports, unused functions, and redundant locals by checking reference counts on the final pass.
-- **Slot-Allocator Renaming**: Reallocates variable identifiers across peer-level scopes using a sorted, greedy algorithm. The most frequently accessed variables are assigned the shortest possible lexicographic names (`a`, `b`, `c`), reusing identifier slots when scopes do not overlap.
-
-## Integrated Tooling
-
-### Obfuscator Engine
-The obfuscation module applies aggressive name mangling to all symbol tables and performs symmetric hex-encryption on string literals. A self-executing unpacker is injected at the top of the bundle, reconstructing string tables dynamically in memory at runtime to prevent static reverse-engineering.
-
-### Sprite Vectorizer (Hex Engine)
-A high-density packing utility that compiles raster image data into highly optimized Lua draw commands. 
-- Employs 8-character hex data packing.
-- Uses binary-search constraint fitting to dial the output to exactly the 8,192-character limit, extracting maximum possible resolution without engine rejection.
-- Automatically handles color quantization (64, 32, 16 palettes) and implements dynamic `getWidth()` centering logic for hardware-agnostic rendering.
-
-### XML Auto-Deployer
-An integrated deployment daemon that natively parses Stormworks `microprocessors/*.xml` files. When a script modification is detected in the workspace, it bypasses the clipboard entirely, traversing the XML DOM to directly inject the compiled minified payload into the corresponding `<object script="..."/>` tags. Supports multi-node logic via prefix routing (e.g., `1_EngineControl.lua`).
-
-## Usage & Build Instructions
-
-The application provides a sleek CustomTkinter graphical interface.
-
-**Requirements:**
-- Python 3.10+
-- Dependencies listed in `requirements.txt`
-
-**Build:**
-Run `build.bat` in a Windows environment. The script utilizes PyInstaller to compile the source pipeline and dependencies into a standalone executable. The output distributable will be written to `_export/VladgeMinifier/`.
+<p align="center">
+  <strong><a href="https://github.com/Rjwolfe44/Stormworks-Minifier-Vladge/releases/latest">⬇ Download the latest release</a></strong>
+  ·
+  <a href="https://github.com/Rjwolfe44/Stormworks-Minifier-Vladge/releases/download/v2.3.5/VladgeMinifier-v2.3.5.zip">Direct zip (v2.3.5)</a>
+</p>
 
 ---
-*Proprietary toolset. See LICENSE for usage terms.*
+
+## Why this exists
+
+Stormworks microcontrollers hard-cap scripts at **8192 characters**. Real vehicle code — guidance, datalink, CIWS, shared `require()` libs — blows past that fast.
+
+VladgeMinifier is built for that ceiling: strip, rename, pack, and validate, with levels from “just delete comments” to full Ultimate compression. It ships as a Windows GUI plus a CLI you can wire into **Cursor / VS Code**.
+
+---
+
+## Quick start
+
+1. Grab the [latest Windows zip](https://github.com/Rjwolfe44/Stormworks-Minifier-Vladge/releases/latest)
+2. Extract anywhere (keep the whole folder — GUI and CLI share `_internal`)
+3. Run `VladgeMinifier.exe`
+4. Drop a `.lua` file in, pick a level, minify
+5. Paste into Stormworks (or use **Install to Editor** for one-key minify → clipboard)
+
+Auto-update is built in: when a newer GitHub release exists, the app offers to download and install it.
+
+---
+
+## Minify levels
+
+| Level | Name | What it does |
+|------:|------|----------------|
+| **1** | Strip Only | Comments, whitespace, number cleanup |
+| **2** | Standard | + rename locals |
+| **3** | Aggressive | + rename globals / user properties, API aliases *(default)* |
+| **4** | Ultimate | + DCE, constant inline, packing, dedup, smart aliases, and more — falls back to L3 if L4 would grow |
+
+Stormworks callbacks (`onTick`, `onDraw`, …) and API tables (`screen`, `map`, `input`, …) are never renamed. Property names on those APIs stay intact (`map.mapToScreen`, not `map.a`).
+
+After minify you get a clear status:
+
+- **`[OK]`** — parses clean, under the limit
+- **`[BROKEN]`** — semantic / undefined refs (don’t paste that into a vehicle)
+- **Over limit** — still over 8192 after compression
+
+---
+
+## GUI features
+
+- Live minify with char count vs 8192
+- **Keep line breaks** — readable minified output when you want it
+- **Inline funcs** — optional L4 function inlining
+- Drag-and-drop `.lua`
+- Watch mode — remminify when the file changes
+- Batch folder minify
+- **Install to Editor** — Cursor / VS Code tasks + keybinds (no copying megabytes into your project)
+- Sprite → Lua packing utility
+- Deploy into microcontroller XML when you point it at your vehicle folder
+- Built-in updater from GitHub Releases
+
+### Editor shortcuts (after Install to Editor)
+
+With a `.lua` file focused:
+
+| Shortcut | Action |
+|----------|--------|
+| **Ctrl+Alt+M** | Minify → **clipboard** (your chosen paste level) |
+| **Ctrl+Alt+Shift+M** | Pick any Vladge preset (readable save, batch, …) |
+
+Re-run **Install to Editor** on an older project once to migrate broken leftover CLI copies out of `.vscode/`.
+
+---
+
+## CLI
+
+The zip includes `vladgeminifier-cli.exe` next to the GUI.
+
+```bat
+vladgeminifier-cli.exe myscript.lua --level 4
+vladgeminifier-cli.exe myscript.lua --level 4 --clipboard --no-save --quiet
+vladgeminifier-cli.exe . --batch --level 4
+```
+
+Useful flags:
+
+| Flag | Meaning |
+|------|---------|
+| `--level 1..4` | Minify strength (default 3) |
+| `--clipboard` | Copy result to clipboard |
+| `--no-save` | Don’t write `_minified/` (great with clipboard) |
+| `--multiline statements\|preserve` | Keep readable line breaks |
+| `--inline-functions` | More aggressive L4 inlining |
+| `--deploy <dir>` | Inject into microcontroller XML / copy out |
+| `--batch` | Process a whole folder |
+| `--quiet` | Stats off |
+
+---
+
+## What’s under the hood
+
+At a high level, Ultimate mode can:
+
+- Bundle `require()` libraries and shake unused exports
+- Rename locals (and user table keys) to shortest safe names
+- Alias hot Stormworks API calls when it saves characters
+- Deduplicate repeated strings / literals
+- Dead-code eliminate unused locals and unreachable helpers
+- Pack common structures (defaults, vectors, property tables) when the result still parses
+- Validate with a real Lua parse + Stormworks-aware semantic check
+
+If Ultimate ever produces *larger* output than Aggressive, it keeps Aggressive. Size alone isn’t success — broken Lua isn’t “smaller.”
+
+---
+
+## Build from source
+
+```bat
+git clone https://github.com/Rjwolfe44/Stormworks-Minifier-Vladge.git
+cd Stormworks-Minifier-Vladge
+build.bat
+```
+
+Output lands in `_export/VladgeMinifier/` (same layout as the release zip).
+
+Needs **Python 3.10+** and the packages in `requirements.txt`. Tests: `python -m pytest tests/ -q`.
+
+---
+
+## Links
+
+- **[Latest download](https://github.com/Rjwolfe44/Stormworks-Minifier-Vladge/releases/latest)**
+- **[v2.3.5 zip](https://github.com/Rjwolfe44/Stormworks-Minifier-Vladge/releases/download/v2.3.5/VladgeMinifier-v2.3.5.zip)**
+- **[All releases](https://github.com/Rjwolfe44/Stormworks-Minifier-Vladge/releases)**
+- **[Source](https://github.com/Rjwolfe44/Stormworks-Minifier-Vladge)**
+
+---
+
+Made for people who live in the Stormworks Lua editor and are tired of fighting the 8192 wall.
+
+See [LICENSE](LICENSE) for usage terms.
