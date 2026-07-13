@@ -22,11 +22,17 @@ _export/
 
 # Local agent / scratch workspace (do not commit)
 _workspace/
+.cursor/
+
+# Local agent guide (never publish)
+AGENTS.md
+**/AGENTS.md
 
 # Accidental minify / debug dumps
 test_out.lua
 test_out*.lua
 debug.txt
+debug_*.lua
 
 # OS junk
 Thumbs.db
@@ -36,3 +42,4 @@ Desktop.ini
 # Local git amend helpers (never commit)
 .git/AMEND_MSG.txt
 .git/COMMIT_EDITMSG_CLEAN.txt
+.git/COMMIT_MSG.txt
