@@ -78,6 +78,8 @@ def test_build_task_presets_clipboard_default_level():
     assert "Vladge: Paste (L3 Aggressive)" in labels
     assert "Vladge: Save readable (L2)" in labels
     assert "Vladge: Batch folder (L4)" in labels
+    assert "Vladge: Minify addon (L2)" in labels
+    assert "--addon" in next(t["args"] for t in tasks if "addon" in t["label"].lower())
 
     defaults = [
         t for t in tasks
@@ -187,7 +189,7 @@ def test_install_is_idempotent(tmp_path: Path, fake_cli: Path):
 
     data = json.loads((project / ".vscode/tasks.json").read_text(encoding="utf-8"))
     vladge_tasks = [t for t in data["tasks"] if t["label"].startswith("Vladge:")]
-    assert len(vladge_tasks) == 8
+    assert len(vladge_tasks) == 9
 
     defaults = [
         t for t in vladge_tasks

@@ -29,6 +29,7 @@ _HERE = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(_HERE))
 
 from src.core.minifier import minify, minify_file, CHAR_LIMIT, LEVEL_NAMES
+from src.core.addon_mode import ADDON_CHAR_LIMIT, MC_CHAR_LIMIT
 from src.version import __version__
 
 
@@ -57,8 +58,11 @@ def print_stats(stats, filename: str = ""):
     print(f"  After:     {BOLD}{stats.final_size:,}{RESET} chars  ({stats.ratio:.1f}% reduction)")
     print(f"  Saved:     {GREEN}{stats.bytes_saved:,}{RESET} chars  in {stats.elapsed_ms:.1f}ms")
 
+    limit = getattr(stats, "char_limit", CHAR_LIMIT) or CHAR_LIMIT
+    mode = getattr(stats, "mode", "microcontroller")
     limit_pct = stats.limit_pct
-    print(f"  8192 cap:  {_color_bar(limit_pct)}")
+    print(f"  Mode:      {mode}")
+    print(f"  {limit} cap:  {_color_bar(limit_pct)}")
 
     if not stats.semantic_ok:
         n_err = len(stats.semantic_errors)
@@ -68,9 +72,9 @@ def print_stats(stats, filename: str = ""):
         if n_err > 8:
             print(f"             {DIM}… and {n_err - 8} more{RESET}")
     elif stats.under_limit:
-        print(f"  Status:    {GREEN}[OK] Under 8192 char limit{RESET}")
+        print(f"  Status:    {GREEN}[OK] Under {limit} char limit{RESET}")
     else:
-        over = stats.final_size - CHAR_LIMIT
+        over = stats.final_size - limit
         print(f"  Status:    {RED}[!!] Over limit by {over:,} chars!{RESET}")
 
     print()
@@ -79,28 +83,35 @@ def print_stats(stats, filename: str = ""):
     print()
 
 
+def _write_utf8_no_bom(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(text.encode("utf-8"))  # no BOM — Stormworks rejects BOM often
+
+
 def _batch_worker(args):
     """Worker function for multicore batch processing."""
-    path, level, obfuscate, multiline, inline_functions, lua53_floor = args
+    path, level, obfuscate, multiline, inline_functions, lua53_floor, addon = args
     try:
         result, stats = minify_file(
             str(path), level, obfuscate,
             multiline=multiline if multiline != "off" else False,
             inline_functions=inline_functions,
             lua53_floor=lua53_floor,
+            addon=addon,
         )
         return path, result, stats, None
     except Exception as e:
         return path, None, None, str(e)
 
 
-def process_single(input_path: Path, level: int, clipboard: bool, no_save: bool, save: str | None, deploy: str | None, quiet: bool, obfuscate: bool, multiline: str = "off", inline_functions: bool = False, lua53_floor: bool = False):
+def process_single(input_path: Path, level: int, clipboard: bool, no_save: bool, save: str | None, deploy: str | None, quiet: bool, obfuscate: bool, multiline: str = "off", inline_functions: bool = False, lua53_floor: bool = False, addon: bool = False):
     """Process a single file."""
     result, stats = minify_file(
         str(input_path), level, obfuscate,
         multiline=multiline if multiline != "off" else False,
         inline_functions=inline_functions,
         lua53_floor=lua53_floor,
+        addon=addon,
     )
 
     if not quiet:
@@ -115,7 +126,7 @@ def process_single(input_path: Path, level: int, clipboard: bool, no_save: bool,
             out_path = Path(save)
             out_path.parent.mkdir(parents=True, exist_ok=True)
 
-        out_path.write_text(result, encoding="utf-8")
+        _write_utf8_no_bom(out_path, result)
         if not quiet:
             print(f"  {GREEN}Saved -> {out_path}{RESET}\n")
 
@@ -146,7 +157,7 @@ def process_single(input_path: Path, level: int, clipboard: bool, no_save: bool,
     return stats
 
 
-def process_batch(folder: Path, level: int, workers: int, deploy: str | None, quiet: bool, obfuscate: bool, multiline: str = "off", inline_functions: bool = False, lua53_floor: bool = False):
+def process_batch(folder: Path, level: int, workers: int, deploy: str | None, quiet: bool, obfuscate: bool, multiline: str = "off", inline_functions: bool = False, lua53_floor: bool = False, addon: bool = False):
     """Batch-process all .lua files in a folder (multicore)."""
     lua_files = list(folder.rglob("*.lua"))
     # Exclude _minified output dirs and _build dirs
@@ -165,6 +176,7 @@ def process_batch(folder: Path, level: int, workers: int, deploy: str | None, qu
     print(f"\n{BOLD}{CYAN}VladgeMinifier Batch Mode{RESET}")
     print(f"  Files:   {len(lua_files)}")
     print(f"  Level:   {level} - {LEVEL_NAMES.get(level, '?')}")
+    print(f"  Mode:    {'addon' if addon else 'microcontroller'}")
     print(f"  Workers: {workers}\n")
 
     total_before = 0
@@ -172,7 +184,7 @@ def process_batch(folder: Path, level: int, workers: int, deploy: str | None, qu
     errors = 0
     t0 = time.perf_counter()
 
-    args = [(f, level, obfuscate, multiline, inline_functions, lua53_floor) for f in lua_files]
+    args = [(f, level, obfuscate, multiline, inline_functions, lua53_floor, addon) for f in lua_files]
     with ProcessPoolExecutor(max_workers=workers) as executor:
         futures = {executor.submit(_batch_worker, a): a for a in args}
         done = 0
@@ -189,12 +201,12 @@ def process_batch(folder: Path, level: int, workers: int, deploy: str | None, qu
             # Mirror directory structure in output
             out_path = out_dir / rel
             out_path.parent.mkdir(parents=True, exist_ok=True)
-            out_path.write_text(result, encoding="utf-8")
+            _write_utf8_no_bom(out_path, result)
 
             if deploy:
                 deploy_dir = Path(deploy)
                 from src.core.deployer import deploy_to_target
-                deploy_to_target(result, input_path.name, deploy_dir)
+                deploy_to_target(result, Path(path).name, deploy_dir)
 
             total_before += stats.original_size
             total_after += stats.final_size
@@ -263,6 +275,9 @@ def main():
                         help="Inline small local functions (L4, experimental)")
     parser.add_argument("--lua53-floor", action="store_true",
                         help="Enable math.floor -> (x)//1 golfing (opt-in)")
+    parser.add_argument("--addon", action="store_true",
+                        help="Mission addon mode: 131071 limit, protect g_savedata, "
+                             "keep property.slider/checkbox on own lines, UTF-8 no BOM")
     parser.add_argument("--quiet", action="store_true",
                         help="Suppress output")
 
@@ -270,21 +285,25 @@ def main():
 
     input_path = Path(args.input)
     workers = args.workers or os.cpu_count() or 4
+    # Addon scripts: default to safer L2 unless user explicitly picks a level via argv.
+    level = args.level
+    if args.addon and "--level" not in sys.argv:
+        level = 2
 
     if args.batch or input_path.is_dir():
         if not input_path.is_dir():
             print(f"{RED}Error: {input_path} is not a directory{RESET}")
             sys.exit(1)
-        process_batch(input_path, args.level, workers, args.deploy, args.quiet, args.obfuscate,
-                      args.multiline, args.inline_functions, args.lua53_floor)
+        process_batch(input_path, level, workers, args.deploy, args.quiet, args.obfuscate,
+                      args.multiline, args.inline_functions, args.lua53_floor, args.addon)
     else:
         if not input_path.exists():
             print(f"{RED}Error: file not found: {input_path}{RESET}")
             sys.exit(1)
         if not input_path.suffix.lower() == ".lua":
             print(f"{YELLOW}Warning: {input_path} is not a .lua file{RESET}")
-        process_single(input_path, args.level, args.clipboard, args.no_save, args.save, args.deploy, args.quiet,
-                       args.obfuscate, args.multiline, args.inline_functions, args.lua53_floor)
+        process_single(input_path, level, args.clipboard, args.no_save, args.save, args.deploy, args.quiet,
+                       args.obfuscate, args.multiline, args.inline_functions, args.lua53_floor, args.addon)
 
 
 if __name__ == "__main__":

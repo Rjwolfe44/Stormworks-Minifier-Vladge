@@ -184,6 +184,20 @@ def build_task_presets(default_paste_level: int) -> list[dict]:
             "presentation": {"reveal": "always", "panel": "shared"},
             "problemMatcher": [],
         },
+        {
+            "label": f"{TASK_PREFIX} Minify addon (L2)",
+            "type": "process",
+            "command": shim_cmd,
+            "args": [
+                "${file}",
+                "--addon",
+                "--level", "2",
+                "--clipboard", "--no-save", "--quiet",
+            ],
+            "group": "build",
+            "presentation": presentation,
+            "problemMatcher": [],
+        },
     ])
     return tasks
 

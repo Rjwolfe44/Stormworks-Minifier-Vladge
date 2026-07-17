@@ -51,6 +51,7 @@ if not getattr(sys, 'frozen', False):
     sys.path.insert(0, str(_HERE))
 
 from src.core.minifier import minify, minify_file, CHAR_LIMIT, LEVEL_NAMES, MinifyStats
+from src.core.addon_mode import ADDON_CHAR_LIMIT, MC_CHAR_LIMIT
 from src.gui import theme as T
 from src.version import __version__ as APP_VERSION
 
@@ -101,6 +102,7 @@ class VladgeMinifierApp(_BaseApp):
         self._obfuscate = ctk.BooleanVar(value=False)
         self._multiline = ctk.BooleanVar(value=False)
         self._inline_functions = ctk.BooleanVar(value=False)
+        self._addon_mode = ctk.BooleanVar(value=False)
         self._is_minifying = False
         
         # Subsystems
@@ -234,6 +236,19 @@ class VladgeMinifierApp(_BaseApp):
         )
         inline_cb.grid(row=0, column=4, padx=(10, 10), pady=10, sticky="e")
 
+        addon_cb = ctk.CTkCheckBox(
+            header,
+            text="Addon / mission (131071)",
+            variable=self._addon_mode,
+            command=self._on_addon_toggle,
+            font=T.FONT_SMALL,
+            text_color=T.TEXT_SECONDARY,
+            fg_color=T.ACCENT,
+            hover_color=T.ACCENT_DIM,
+            border_color=T.BORDER,
+        )
+        addon_cb.grid(row=0, column=5, padx=(10, 10), pady=10, sticky="e")
+
         # Drop Locals toggle (V3 feature)
         self._drop_locals = ctk.BooleanVar(value=False)
         drop_locals_cb = ctk.CTkCheckBox(
@@ -246,7 +261,7 @@ class VladgeMinifierApp(_BaseApp):
             hover_color=T.ACCENT_DIM,
             border_color=T.BORDER,
         )
-        drop_locals_cb.grid(row=0, column=5, padx=(10, 10), pady=10, sticky="e")
+        drop_locals_cb.grid(row=0, column=6, padx=(10, 10), pady=10, sticky="e")
 
         # Auto-copy toggle
         auto_copy_cb = ctk.CTkCheckBox(
@@ -259,7 +274,7 @@ class VladgeMinifierApp(_BaseApp):
             hover_color=T.ACCENT_DIM,
             border_color=T.BORDER,
         )
-        auto_copy_cb.grid(row=0, column=6, padx=(10, 10), pady=10, sticky="e")
+        auto_copy_cb.grid(row=0, column=7, padx=(10, 10), pady=10, sticky="e")
         
         # Watch Mode toggle
         watch_cb = ctk.CTkCheckBox(
@@ -273,7 +288,7 @@ class VladgeMinifierApp(_BaseApp):
             hover_color=T.ACCENT_DIM,
             border_color=T.BORDER,
         )
-        watch_cb.grid(row=0, column=7, padx=(10, 20), pady=10, sticky="e")
+        watch_cb.grid(row=0, column=8, padx=(10, 20), pady=10, sticky="e")
 
     def _build_controls(self):
         ctrl_frame = ctk.CTkFrame(self, fg_color=T.BG_MID, corner_radius=0)
@@ -427,12 +442,13 @@ class VladgeMinifierApp(_BaseApp):
         sep = ctk.CTkFrame(stats_outer, fg_color=T.BORDER, height=1)
         sep.pack(fill="x", padx=16, pady=10)
 
-        ctk.CTkLabel(
+        self._limit_title = ctk.CTkLabel(
             stats_outer,
             text="8192 CHAR LIMIT",
             font=("Segoe UI", 9, "bold"),
             text_color=T.TEXT_SECONDARY,
-        ).pack(padx=16, anchor="w")
+        )
+        self._limit_title.pack(padx=16, anchor="w")
 
         self._limit_bar = ctk.CTkProgressBar(
             stats_outer,
@@ -632,6 +648,16 @@ class VladgeMinifierApp(_BaseApp):
             else:
                 self._rpc.update("Idling", "Ready to optimize")
 
+    def _on_addon_toggle(self):
+        """Switch limit badge between microcontroller (8192) and addon (131071)."""
+        if self._addon_mode.get():
+            self._limit_title.configure(text=f"{ADDON_CHAR_LIMIT:,} CHAR LIMIT (ADDON)")
+            # Addon scripts are safer at L2 by default (rename locals only).
+            if self._minify_level.get() >= 3:
+                self._minify_level.set(2)
+        else:
+            self._limit_title.configure(text=f"{MC_CHAR_LIMIT:,} CHAR LIMIT (MC)")
+
     def _on_watch_trigger(self):
         # Called from watcher thread, safely schedule minify on main thread
         self.after(0, self._start_minify)
@@ -682,6 +708,7 @@ class VladgeMinifierApp(_BaseApp):
                     drop_locals=self._drop_locals.get(),
                     multiline=ml,
                     inline_functions=self._inline_functions.get(),
+                    addon=self._addon_mode.get(),
                 )
                 self._last_result = result
                 self._last_source = self._current_file.read_text(encoding="utf-8", errors="replace")
@@ -721,12 +748,15 @@ class VladgeMinifierApp(_BaseApp):
         self._stat_time.configure(text=f"{stats.elapsed_ms:.1f}ms")
 
         # Limit bar
+        limit = getattr(stats, "char_limit", CHAR_LIMIT) or CHAR_LIMIT
         pct = stats.limit_pct / 100
         bar_color = T.GREEN if pct < 0.70 else T.AMBER if pct < 0.90 else T.RED
         self._limit_bar.configure(progress_color=bar_color)
         self._limit_bar.set(min(pct, 1.0))
+        mode_label = "ADDON" if getattr(stats, "mode", "") == "addon" else "MC"
+        self._limit_title.configure(text=f"{limit:,} CHAR LIMIT ({mode_label})")
         self._limit_label.configure(
-            text=f"{stats.final_size:,} / {CHAR_LIMIT:,}  ({stats.limit_pct:.1f}%)"
+            text=f"{stats.final_size:,} / {limit:,}  ({stats.limit_pct:.1f}%)"
         )
 
         if not stats.semantic_ok:
@@ -735,9 +765,11 @@ class VladgeMinifierApp(_BaseApp):
                 text=f"❌ BROKEN: {n_err} semantic error(s)", text_color=T.RED
             )
         elif stats.under_limit:
-            self._status_badge.configure(text="✅ Under 8192 limit", text_color=T.GREEN)
+            self._status_badge.configure(
+                text=f"✅ Under {limit:,} limit", text_color=T.GREEN
+            )
         else:
-            over = stats.final_size - CHAR_LIMIT
+            over = stats.final_size - limit
             self._status_badge.configure(
                 text=f"❌ Over by {over:,} chars!", text_color=T.RED
             )
@@ -845,11 +877,14 @@ class VladgeMinifierApp(_BaseApp):
             total_after = 0
             for path in lua_files:
                 try:
-                    result, stats = minify_file(str(path), level, self._obfuscate.get())
+                    result, stats = minify_file(
+                        str(path), level, self._obfuscate.get(),
+                        addon=self._addon_mode.get(),
+                    )
                     rel = path.relative_to(folder_path)
                     out = out_dir / rel
                     out.parent.mkdir(parents=True, exist_ok=True)
-                    out.write_text(result, encoding="utf-8")
+                    out.write_bytes(result.encode("utf-8"))  # no BOM
                     total_before += stats.original_size
                     total_after += stats.final_size
                 except Exception:

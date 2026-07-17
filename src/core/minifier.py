@@ -14,8 +14,9 @@ from .passes.rename_locals import rename_locals
 from .passes.alias_globals import inject_global_aliases
 from .passes.number_literals import optimise_numbers
 from .passes.string_dedup import dedup_strings
+from .addon_mode import ADDON_CHAR_LIMIT, MC_CHAR_LIMIT, finalize_addon_source
 
-CHAR_LIMIT = 8192
+CHAR_LIMIT = MC_CHAR_LIMIT  # default microcontroller ceiling; overridden per-run via stats.char_limit
 
 
 def _resolve_multiline(multiline: Union[bool, str]) -> MultilineMode:
@@ -34,6 +35,8 @@ class MinifyStats:
     original_size: int = 0
     final_size: int = 0
     elapsed_ms: float = 0.0
+    char_limit: int = MC_CHAR_LIMIT
+    mode: str = "microcontroller"  # or "addon"
 
     comments_removed: int = 0
     whitespace_saved: int = 0
@@ -74,7 +77,7 @@ class MinifyStats:
 
     @property
     def under_limit(self) -> bool:
-        return self.final_size <= CHAR_LIMIT
+        return self.final_size <= self.char_limit
 
     @property
     def semantic_ok(self) -> bool:
@@ -82,7 +85,7 @@ class MinifyStats:
 
     @property
     def limit_pct(self) -> float:
-        return (self.final_size / CHAR_LIMIT) * 100
+        return (self.final_size / self.char_limit) * 100 if self.char_limit else 0.0
 
     def summary_lines(self) -> List[str]:
         lines = [
@@ -141,14 +144,24 @@ def minify(
     multiline: Union[bool, str] = False,
     inline_functions: bool = False,
     lua53_floor: bool = False,
+    addon: bool = False,
 ) -> tuple[str, MinifyStats]:
-    """Minify Lua source at the given optimisation level."""
+    """Minify Lua source at the given optimisation level.
+
+    addon=True: mission/addon script mode (131071 char limit, property.* line breaks,
+    skip property-string packing that targets microcontroller PINs).
+    """
     t0 = time.perf_counter()
+    # Addon mission UI + debugging: prefer statement breaks when caller left default off.
+    if addon and (multiline is False or multiline == "off"):
+        multiline = "statements"
     ws_mode = _resolve_multiline(multiline)
     stats = MinifyStats(
         original_size=len(source),
         level=level,
         level_name=LEVEL_NAMES.get(level, "Unknown"),
+        char_limit=ADDON_CHAR_LIMIT if addon else MC_CHAR_LIMIT,
+        mode="addon" if addon else "microcontroller",
     )
 
     source = source.replace("\r\n", "\n").replace("\r", "\n")
@@ -164,6 +177,7 @@ def minify(
             multiline=multiline,
             inline_functions=False,
             lua53_floor=lua53_floor,
+            addon=addon,
         )
 
     from .passes.combiner import bundle_requires
@@ -176,9 +190,11 @@ def minify(
     if level >= 3:
         from .passes.default_pack import compress_default_chains
         source, _ = compress_default_chains(source)
-        from .passes.property_pack import pack_property_strings
-        source, packed = pack_property_strings(source)
-        stats.property_packed += packed
+        # property_pack targets microcontroller property.getNumber PIN strings — skip for addons
+        if not addon:
+            from .passes.property_pack import pack_property_strings
+            source, packed = pack_property_strings(source)
+            stats.property_packed += packed
 
     if level >= 4:
         from .passes.vector_pack import pack_vector_tables
@@ -277,7 +293,7 @@ def minify(
 
     current_source = tokens_to_source(tokens)
 
-    if level >= 3:
+    if level >= 3 and not addon:
         from .passes.property_pack import pack_property_strings
         current_source, late_pack = pack_property_strings(current_source)
         stats.property_packed += late_pack
@@ -320,9 +336,17 @@ def minify(
         if len(current_source) > len(l3_out):
             current_source = l3_out
             stats.final_size = l3_stats.final_size
+            stats.char_limit = l3_stats.char_limit
+            stats.mode = l3_stats.mode
             stats.semantic_errors = l3_stats.semantic_errors
             stats.elapsed_ms = (time.perf_counter() - t0) * 1000
+            if addon:
+                current_source = finalize_addon_source(current_source)
+                stats.final_size = len(current_source)
             return current_source, stats
+
+    if addon:
+        current_source = finalize_addon_source(current_source)
 
     stats.final_size = len(current_source)
     stats.elapsed_ms = (time.perf_counter() - t0) * 1000
@@ -341,6 +365,7 @@ def minify_file(
     multiline: Union[bool, str] = False,
     inline_functions: bool = False,
     lua53_floor: bool = False,
+    addon: bool = False,
 ) -> tuple[str, MinifyStats]:
     import os
     with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -355,4 +380,5 @@ def minify_file(
         multiline=multiline,
         inline_functions=inline_functions,
         lua53_floor=lua53_floor,
+        addon=addon,
     )

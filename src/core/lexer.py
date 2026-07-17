@@ -68,10 +68,13 @@ SW_GLOBALS = frozenset({
     "onCharacterSit", "onCharacterUnsit", "onCharacterPickup",
     "onButtonPress", "onSpawnAddonComponent",
     "onVehicleSpawn", "onVehicleDespawn", "onVehicleLoad",
-    "onVehicleUnload", "onVehicleTeleport",
+    "onVehicleUnload", "onVehicleTeleport", "onVehicleDamaged",
     "onObjectLoad", "onObjectUnload",
+    "onGroupSpawn", "onGroupDespawn", "onAddonStart",
     "onFireExtinguished", "onForestFireSpawned", "onForestFireExtinguished",
     "onTornado", "onMeteor", "onTsunami", "onWhirlpool", "onVolcano",
+    # ── Mission addon reserved ────────────────────────────────────────────────
+    "g_savedata",
 })
 
 # Stormworks and Lua API internal property accessors (e.g., `math.pi`).
@@ -122,15 +125,29 @@ SW_API_PROPERTIES = frozenset({
     "position", "multiply", "rotationX", "rotationY", "rotationZ",
     "translation", "identity", "lookAt",
     # ── server/http/async members (addon API) ─────────────────────────────────
-    "announce", "getPlayerPos", "setCharacterData", "reviveCharacter",
-    "getMapID", "addMapObject", "removeMapObject", "removePopup",
-    "getVehiclePos", "setVehicleKeypad", "getVehicleDial",
+    "announce", "notify", "getPlayerPos", "setCharacterData", "reviveCharacter",
+    "getMapID", "addMapObject", "removeMapObject", "removeMapID", "removeMapLine",
+    "addMapLine", "removePopup", "setPopup", "addPopup",
+    "getVehiclePos", "getVehicleData", "getVehicleGroup", "getVehicleSimulating",
+    "getVehicleLocal", "moveGroupSafe", "setVehiclePosSafe",
+    "setVehicleKeypad", "getVehicleDial", "setVehicleButton",
     "getVehicleBattery", "setVehicleBattery", "getVehicleComponents",
-    "getPlayerName", "getPlayerCharacterID", "getCharacterVehicle",
-    "spawnVehicle", "despawnVehicle",
-    "setPopup", "addPopup",
-    "getAddonData", "getAddonIndex",
+    "getPlayerName", "getPlayers", "getPlayerCharacterID", "getCharacterVehicle",
+    "setCharacterSeated", "getCharacterData", "spawnObject", "despawnObject",
+    "spawnVehicle", "despawnVehicle", "despawnVehicleGroup",
+    "setAITarget", "setAIState", "setAITargetVehicle", "getAITarget",
+    "spawnExplosion", "getOceanTransform", "getOceanFloor",
+    "setCurrency", "getCurrency", "getResearchPoints",
+    "getAddonData", "getAddonIndex", "getLocationIndex", "getLocationData",
+    "spawnAddonLocation", "getPathForVehicle", "getTileTransform",
+    "httpGet", "httpPost",
     "get", "fetch", "getPort",
+    # ── more addon / mission server APIs ─────────────────────────────────────
+    "pathfind", "setVehicleTank", "setVehicleWeapon", "setVehicleTooltip",
+    "spawnAddonComponent", "getAddonCount", "getLocationComponentData",
+    "setObjectPos", "isInChannel", "httpReply",
+    # ── matrix extras used by addons ──────────────────────────────────────────
+    "distance", "inverse", "transpose", "rotationToFaceXZ",
 })
 
 

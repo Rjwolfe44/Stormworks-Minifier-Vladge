@@ -11,6 +11,9 @@ from typing import List
 from .lexer import Token, TT, SW_GLOBALS, SW_API_PROPERTIES, LUA_KEYWORDS, tokenize
 from .linter import lint_script
 
+# Engine-owned tables with arbitrary user keys — not SW API property surfaces.
+_SW_USER_DATA_TABLES = frozenset({"g_savedata"})
+
 
 def _check_parse(source: str) -> List[str]:
     """luaparser must accept minified output as valid Lua syntax."""
@@ -65,7 +68,12 @@ def validate_minified(source: str) -> List[str]:
 
         recv = tokens[recv_i].value
         prop = tok.value
-        if recv in SW_GLOBALS and prop not in SW_API_PROPERTIES and prop not in LUA_KEYWORDS:
+        if (
+            recv in SW_GLOBALS
+            and recv not in _SW_USER_DATA_TABLES
+            and prop not in SW_API_PROPERTIES
+            and prop not in LUA_KEYWORDS
+        ):
             line_no = source.count("\n", 0, tok.pos) + 1
             errors.append(
                 f"Line {line_no}: Unknown or renamed API property '{recv}.{prop}'. "
