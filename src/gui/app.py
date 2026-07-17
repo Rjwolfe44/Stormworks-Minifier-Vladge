@@ -61,8 +61,8 @@ ctk.set_default_color_theme("dark-blue")
 
 GITHUB_REPO = "rjwolfe44/Stormworks-Minifier-Vladge"
 WINDOW_TITLE = f"⚡ VladgeMinifier v{APP_VERSION}"
-WINDOW_SIZE  = "980x720"
-MIN_SIZE     = (820, 600)
+WINDOW_SIZE  = "1040x740"
+MIN_SIZE     = (760, 600)
 
 
 if HAS_DND:
@@ -103,7 +103,10 @@ class VladgeMinifierApp(_BaseApp):
         self._multiline = ctk.BooleanVar(value=False)
         self._inline_functions = ctk.BooleanVar(value=False)
         self._addon_mode = ctk.BooleanVar(value=False)
+        self._drop_locals = ctk.BooleanVar(value=False)
         self._is_minifying = False
+        self._header_opt_widgets: list = []
+        self._header_opts_width = 0
         
         # Subsystems
         self._watcher = MinifierFileWatcher(self._on_watch_trigger)
@@ -162,12 +165,15 @@ class VladgeMinifierApp(_BaseApp):
         self._build_actions()
 
     def _build_header(self):
-        header = ctk.CTkFrame(self, fg_color=T.BG_MID, corner_radius=0, height=64)
+        """Brand row + wrapping option checkboxes (no horizontal clip)."""
+        header = ctk.CTkFrame(self, fg_color=T.BG_MID, corner_radius=0)
         header.grid(row=0, column=0, sticky="ew")
-        header.grid_propagate(False)
-        header.grid_columnconfigure(1, weight=1)
+        header.grid_columnconfigure(0, weight=1)
 
-        # Logo
+        brand = ctk.CTkFrame(header, fg_color="transparent")
+        brand.grid(row=0, column=0, sticky="ew", padx=16, pady=(10, 2))
+        brand.grid_columnconfigure(1, weight=1)
+
         logo_img = None
         logo_path = _HERE / "src" / "assets" / "logo.png"
         if logo_path.exists():
@@ -175,120 +181,92 @@ class VladgeMinifierApp(_BaseApp):
                 logo_img = ctk.CTkImage(
                     light_image=Image.open(logo_path),
                     dark_image=Image.open(logo_path),
-                    size=(28, 28)
+                    size=(28, 28),
                 )
             except Exception:
                 pass
 
-        logo_lbl = ctk.CTkLabel(
-            header,
+        ctk.CTkLabel(
+            brand,
             text=" VladgeMinifier",
             image=logo_img,
             compound="left",
             font=T.FONT_TITLE,
             text_color=T.ACCENT,
-        )
-        logo_lbl.grid(row=0, column=0, padx=20, pady=10, sticky="w")
+        ).grid(row=0, column=0, sticky="w")
 
-        # Subtitle
-        sub_lbl = ctk.CTkLabel(
-            header,
+        ctk.CTkLabel(
+            brand,
             text="Stormworks Lua Minifier",
             font=T.FONT_SMALL,
             text_color=T.TEXT_SECONDARY,
-        )
-        sub_lbl.grid(row=0, column=1, padx=0, pady=10, sticky="w")
+        ).grid(row=0, column=1, padx=(12, 0), sticky="w")
 
-        # Obfuscate toggle
-        obfuscate_cb = ctk.CTkCheckBox(
-            header,
-            text="Obfuscate",
-            variable=self._obfuscate,
-            font=T.FONT_SMALL,
-            text_color=T.TEXT_SECONDARY,
-            fg_color=T.RED,
-            hover_color=T.ACCENT_DIM,
-            border_color=T.BORDER,
-        )
-        obfuscate_cb.grid(row=0, column=2, padx=(20, 10), pady=10, sticky="e")
+        self._opts_frame = ctk.CTkFrame(header, fg_color="transparent")
+        self._opts_frame.grid(row=1, column=0, sticky="ew", padx=12, pady=(2, 10))
 
-        multiline_cb = ctk.CTkCheckBox(
-            header,
-            text="Keep line breaks",
-            variable=self._multiline,
+        cb_kwargs = dict(
             font=T.FONT_SMALL,
             text_color=T.TEXT_SECONDARY,
-            fg_color=T.ACCENT,
             hover_color=T.ACCENT_DIM,
             border_color=T.BORDER,
         )
-        multiline_cb.grid(row=0, column=3, padx=(10, 10), pady=10, sticky="e")
 
-        inline_cb = ctk.CTkCheckBox(
-            header,
-            text="Inline funcs",
-            variable=self._inline_functions,
-            font=T.FONT_SMALL,
-            text_color=T.TEXT_SECONDARY,
-            fg_color=T.ACCENT,
-            hover_color=T.ACCENT_DIM,
-            border_color=T.BORDER,
-        )
-        inline_cb.grid(row=0, column=4, padx=(10, 10), pady=10, sticky="e")
+        specs = [
+            ("Obfuscate", self._obfuscate, T.RED, None),
+            ("Keep line breaks", self._multiline, T.ACCENT, None),
+            ("Inline funcs", self._inline_functions, T.ACCENT, None),
+            ("Addon (131071)", self._addon_mode, T.ACCENT, self._on_addon_toggle),
+            ("Drop locals", self._drop_locals, T.AMBER, None),
+            ("Auto-copy", self._auto_copy, T.ACCENT, None),
+            ("Watch file", self._watch_enabled, T.AMBER, self._on_watch_toggle),
+        ]
 
-        addon_cb = ctk.CTkCheckBox(
-            header,
-            text="Addon / mission (131071)",
-            variable=self._addon_mode,
-            command=self._on_addon_toggle,
-            font=T.FONT_SMALL,
-            text_color=T.TEXT_SECONDARY,
-            fg_color=T.ACCENT,
-            hover_color=T.ACCENT_DIM,
-            border_color=T.BORDER,
-        )
-        addon_cb.grid(row=0, column=5, padx=(10, 10), pady=10, sticky="e")
+        self._header_opt_widgets = []
+        for text, var, color, cmd in specs:
+            kw = dict(cb_kwargs)
+            kw.update(text=text, variable=var, fg_color=color)
+            if cmd is not None:
+                kw["command"] = cmd
+            cb = ctk.CTkCheckBox(self._opts_frame, **kw)
+            # place() managed by reflow — keep off-grid until first layout
+            cb.place(x=0, y=0)
+            self._header_opt_widgets.append(cb)
 
-        # Drop Locals toggle (V3 feature)
-        self._drop_locals = ctk.BooleanVar(value=False)
-        drop_locals_cb = ctk.CTkCheckBox(
-            header,
-            text="Drop Locals",
-            variable=self._drop_locals,
-            font=T.FONT_SMALL,
-            text_color=T.TEXT_SECONDARY,
-            fg_color=T.AMBER,
-            hover_color=T.ACCENT_DIM,
-            border_color=T.BORDER,
-        )
-        drop_locals_cb.grid(row=0, column=6, padx=(10, 10), pady=10, sticky="e")
+        self._opts_frame.bind("<Configure>", self._reflow_header_opts)
+        self.after(50, self._reflow_header_opts)
 
-        # Auto-copy toggle
-        auto_copy_cb = ctk.CTkCheckBox(
-            header,
-            text="Auto-copy",
-            variable=self._auto_copy,
-            font=T.FONT_SMALL,
-            text_color=T.TEXT_SECONDARY,
-            fg_color=T.ACCENT,
-            hover_color=T.ACCENT_DIM,
-            border_color=T.BORDER,
-        )
-        auto_copy_cb.grid(row=0, column=7, padx=(10, 10), pady=10, sticky="e")
-        
-        # Watch Mode toggle
-        watch_cb = ctk.CTkCheckBox(
-            header,
-            text="Watch File (Auto-Minify on Save)",
-            variable=self._watch_enabled,
-            command=self._on_watch_toggle,
-            font=T.FONT_SMALL,
-            text_color=T.TEXT_SECONDARY,
-            fg_color=T.AMBER,
-            hover_color=T.ACCENT_DIM,
-            border_color=T.BORDER,
-        )
-        watch_cb.grid(row=0, column=8, padx=(10, 20), pady=10, sticky="e")
+    def _reflow_header_opts(self, event=None):
+        """Wrap header option checkboxes to the next line when the window is narrow."""
+        frame = getattr(self, "_opts_frame", None)
+        widgets = getattr(self, "_header_opt_widgets", None)
+        if frame is None or not widgets:
+            return
+
+        width = frame.winfo_width()
+        if width < 40:
+            return
+        if event is not None and abs(width - self._header_opts_width) < 2:
+            return
+        self._header_opts_width = width
+
+        pad_x, pad_y = 12, 6
+        x = 0
+        y = 0
+        row_h = 0
+        for w in widgets:
+            w.update_idletasks()
+            req_w = max(w.winfo_reqwidth(), 1)
+            req_h = max(w.winfo_reqheight(), 1)
+            if x > 0 and x + req_w > width:
+                x = 0
+                y += row_h + pad_y
+                row_h = 0
+            w.place(x=x, y=y)
+            x += req_w + pad_x
+            row_h = max(row_h, req_h)
+
+        frame.configure(height=max(y + row_h, row_h) + 2)
 
     def _build_controls(self):
         ctrl_frame = ctk.CTkFrame(self, fg_color=T.BG_MID, corner_radius=0)
