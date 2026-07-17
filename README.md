@@ -2,18 +2,18 @@
 
 A Stormworks Lua minifier that actually fits the **8192** character limit — and tries hard not to break your script while doing it. Also handles **mission addon** `script.lua` files (131071 limit).
 
-**Current release: [v2.4.1](https://github.com/Rjwolfe44/Stormworks-Minifier-Vladge/releases/tag/v2.4.1)**
+**Current release: [v2.4.2](https://github.com/Rjwolfe44/Stormworks-Minifier-Vladge/releases/tag/v2.4.2)**
 
 <p align="center">
   <a href="https://github.com/Rjwolfe44/Stormworks-Minifier-Vladge/releases/latest"><img alt="Download latest" src="https://img.shields.io/github/v/release/Rjwolfe44/Stormworks-Minifier-Vladge?style=for-the-badge&label=Download&color=2ea44f"></a>
   &nbsp;
-  <a href="https://github.com/Rjwolfe44/Stormworks-Minifier-Vladge/releases/download/v2.4.1/VladgeMinifier-v2.4.1.zip"><img alt="Windows zip" src="https://img.shields.io/badge/Windows-ZIP-0A66C2?style=for-the-badge&logo=windows&logoColor=white"></a>
+  <a href="https://github.com/Rjwolfe44/Stormworks-Minifier-Vladge/releases/download/v2.4.2/VladgeMinifier-v2.4.2.zip"><img alt="Windows zip" src="https://img.shields.io/badge/Windows-ZIP-0A66C2?style=for-the-badge&logo=windows&logoColor=white"></a>
 </p>
 
 <p align="center">
   <strong><a href="https://github.com/Rjwolfe44/Stormworks-Minifier-Vladge/releases/latest">⬇ Download the latest release</a></strong>
   ·
-  <a href="https://github.com/Rjwolfe44/Stormworks-Minifier-Vladge/releases/download/v2.4.1/VladgeMinifier-v2.4.1.zip">Direct zip (v2.4.1)</a>
+  <a href="https://github.com/Rjwolfe44/Stormworks-Minifier-Vladge/releases/download/v2.4.2/VladgeMinifier-v2.4.2.zip">Direct zip (v2.4.2)</a>
 </p>
 
 ---
@@ -155,7 +155,7 @@ Needs **Python 3.10+** and the packages in `requirements.txt`. Tests: `python -m
 ## Links
 
 - **[Latest download](https://github.com/Rjwolfe44/Stormworks-Minifier-Vladge/releases/latest)**
-- **[v2.4.1 zip](https://github.com/Rjwolfe44/Stormworks-Minifier-Vladge/releases/download/v2.4.1/VladgeMinifier-v2.4.1.zip)**
+- **[v2.4.2 zip](https://github.com/Rjwolfe44/Stormworks-Minifier-Vladge/releases/download/v2.4.2/VladgeMinifier-v2.4.2.zip)**
 - **[All releases](https://github.com/Rjwolfe44/Stormworks-Minifier-Vladge/releases)**
 - **[Source](https://github.com/Rjwolfe44/Stormworks-Minifier-Vladge)**
 

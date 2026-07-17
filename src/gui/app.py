@@ -105,9 +105,6 @@ class VladgeMinifierApp(_BaseApp):
         self._addon_mode = ctk.BooleanVar(value=False)
         self._drop_locals = ctk.BooleanVar(value=False)
         self._is_minifying = False
-        self._header_opt_widgets: list = []
-        self._header_opts_width = 0
-        
         # Subsystems
         self._watcher = MinifierFileWatcher(self._on_watch_trigger)
         self._rpc = DiscordRPC()
@@ -165,7 +162,7 @@ class VladgeMinifierApp(_BaseApp):
         self._build_actions()
 
     def _build_header(self):
-        """Brand row + wrapping option checkboxes (no horizontal clip)."""
+        """Brand row + option checkboxes on two packed rows (never clips)."""
         header = ctk.CTkFrame(self, fg_color=T.BG_MID, corner_radius=0)
         header.grid(row=0, column=0, sticky="ew")
         header.grid_columnconfigure(0, weight=1)
@@ -202,71 +199,40 @@ class VladgeMinifierApp(_BaseApp):
             text_color=T.TEXT_SECONDARY,
         ).grid(row=0, column=1, padx=(12, 0), sticky="w")
 
-        self._opts_frame = ctk.CTkFrame(header, fg_color="transparent")
-        self._opts_frame.grid(row=1, column=0, sticky="ew", padx=12, pady=(2, 10))
+        # Two fixed rows — CTk place/reflow was measuring a content-inflated
+        # width so wrap never ran and checkboxes clipped off the window edge.
+        opts = ctk.CTkFrame(header, fg_color="transparent")
+        opts.grid(row=1, column=0, sticky="ew", padx=12, pady=(2, 10))
 
         cb_kwargs = dict(
             font=T.FONT_SMALL,
             text_color=T.TEXT_SECONDARY,
             hover_color=T.ACCENT_DIM,
             border_color=T.BORDER,
+            width=20,
         )
-
-        specs = [
-            ("Obfuscate", self._obfuscate, T.RED, None),
-            ("Keep line breaks", self._multiline, T.ACCENT, None),
-            ("Inline funcs", self._inline_functions, T.ACCENT, None),
-            ("Addon (131071)", self._addon_mode, T.ACCENT, self._on_addon_toggle),
-            ("Drop locals", self._drop_locals, T.AMBER, None),
-            ("Auto-copy", self._auto_copy, T.ACCENT, None),
-            ("Watch file", self._watch_enabled, T.AMBER, self._on_watch_toggle),
+        rows = [
+            [
+                ("Obfuscate", self._obfuscate, T.RED, None),
+                ("Keep line breaks", self._multiline, T.ACCENT, None),
+                ("Inline funcs", self._inline_functions, T.ACCENT, None),
+                ("Addon (131071)", self._addon_mode, T.ACCENT, self._on_addon_toggle),
+            ],
+            [
+                ("Drop locals", self._drop_locals, T.AMBER, None),
+                ("Auto-copy", self._auto_copy, T.ACCENT, None),
+                ("Watch file", self._watch_enabled, T.AMBER, self._on_watch_toggle),
+            ],
         ]
-
-        self._header_opt_widgets = []
-        for text, var, color, cmd in specs:
-            kw = dict(cb_kwargs)
-            kw.update(text=text, variable=var, fg_color=color)
-            if cmd is not None:
-                kw["command"] = cmd
-            cb = ctk.CTkCheckBox(self._opts_frame, **kw)
-            # place() managed by reflow — keep off-grid until first layout
-            cb.place(x=0, y=0)
-            self._header_opt_widgets.append(cb)
-
-        self._opts_frame.bind("<Configure>", self._reflow_header_opts)
-        self.after(50, self._reflow_header_opts)
-
-    def _reflow_header_opts(self, event=None):
-        """Wrap header option checkboxes to the next line when the window is narrow."""
-        frame = getattr(self, "_opts_frame", None)
-        widgets = getattr(self, "_header_opt_widgets", None)
-        if frame is None or not widgets:
-            return
-
-        width = frame.winfo_width()
-        if width < 40:
-            return
-        if event is not None and abs(width - self._header_opts_width) < 2:
-            return
-        self._header_opts_width = width
-
-        pad_x, pad_y = 12, 6
-        x = 0
-        y = 0
-        row_h = 0
-        for w in widgets:
-            w.update_idletasks()
-            req_w = max(w.winfo_reqwidth(), 1)
-            req_h = max(w.winfo_reqheight(), 1)
-            if x > 0 and x + req_w > width:
-                x = 0
-                y += row_h + pad_y
-                row_h = 0
-            w.place(x=x, y=y)
-            x += req_w + pad_x
-            row_h = max(row_h, req_h)
-
-        frame.configure(height=max(y + row_h, row_h) + 2)
+        for row_specs in rows:
+            row = ctk.CTkFrame(opts, fg_color="transparent")
+            row.pack(anchor="w", pady=(0, 4))
+            for text, var, color, cmd in row_specs:
+                kw = dict(cb_kwargs)
+                kw.update(text=text, variable=var, fg_color=color)
+                if cmd is not None:
+                    kw["command"] = cmd
+                ctk.CTkCheckBox(row, **kw).pack(side="left", padx=(0, 14))
 
     def _build_controls(self):
         ctrl_frame = ctk.CTkFrame(self, fg_color=T.BG_MID, corner_radius=0)
