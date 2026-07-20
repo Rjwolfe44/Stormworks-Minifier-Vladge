@@ -270,4 +270,38 @@ class TestWhitespaceSafety:
         assert "and" in result
         assert "or" in result
 
+    def test_paren_then_name_gets_semicolon(self):
+        """`)name` must not glue — Stormworks Lua rejects it."""
+        src = "am(au,AA,az(m))\nai=ai+1"
+        result, _ = minify(src, level=1)
+        assert ")ai" not in result
+        assert ");ai" in result or ")\nai" in result
+
+    def test_call_then_call_gets_semicolon(self):
+        src = "_v(1,B.a.x)\n_v(2,B.a.y)"
+        result, _ = minify(src, level=1)
+        assert ")_v" not in result
+        assert ");_v" in result
+
+    def test_name_then_name_gets_semicolon(self):
+        """Space between bare names is not a statement separator."""
+        src = "o.E=AB\nE[x]=AA"
+        result, _ = minify(src, level=1)
+        assert "AB E" not in result
+        assert "AB;E" in result
+
+    def test_and_call_then_assign_gets_semicolon(self):
+        src = "aB=(f[ac]>0)and al(ac)\nf[ac]=0"
+        result, _ = minify(src, level=1)
+        assert ")f" not in result
+        assert ");f" in result
+        assert "and al" in result  # keyword spacing preserved
+
+    def test_function_body_keyword_still_glues(self):
+        """`)return` / `)end` are valid — do not force a semicolon before keywords."""
+        result, _ = minify("local function f() return 1 end", level=1)
+        assert ");return" not in result
+        assert ")return" in result or ") return" in result
+        assert ");end" not in result
+
 

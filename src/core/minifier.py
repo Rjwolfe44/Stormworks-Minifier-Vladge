@@ -309,6 +309,13 @@ def minify(
         current_source, _, stats.globals_alias_map = inject_global_aliases(current_source)
         stats.globals_aliased = len(stats.globals_alias_map)
 
+    # Re-strip after alias injection so `)input` → `)_a` cannot glue illegally.
+    if level >= 3 and stats.globals_aliased:
+        tokens_alias = tokenize(current_source)
+        tokens_alias, alias_ws = strip_whitespace(tokens_alias, mode=ws_mode)
+        current_source = tokens_to_source(tokens_alias)
+        stats.whitespace_saved += alias_ws
+
     if level >= 4 and not obfuscate:
         tokens2 = tokenize(current_source)
         before_dedup = current_source

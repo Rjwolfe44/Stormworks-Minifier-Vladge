@@ -3,7 +3,7 @@ Whitespace collapsing pass.
 Removes or minimises spaces/newlines while keeping the Lua token stream valid.
 """
 
-from typing import List, Literal
+from typing import List, Literal, Optional
 from ..lexer import Token, TT
 
 MultilineMode = Literal["singleline", "statements", "preserve"]
@@ -17,21 +17,82 @@ _STRUCT_BREAK_AFTER = frozenset({
 
 _STRUCT_BREAK_BEFORE = frozenset({"else", "elseif", "until"})
 
+# Keywords that continue / close a block — space (or nothing) after expr is fine.
+_BLOCK_KEYWORDS = frozenset({
+    "end", "else", "elseif", "until", "then", "do", "in",
+    "and", "or", "not",
+})
 
-def _needs_space(left: Token, right: Token) -> bool:
-    """Determine if a single space is required between two adjacent tokens."""
-    if left.type in _ID_LIKE and right.type in _ID_LIKE:
-        return True
+# Keywords that start a new statement after an expression-ending token.
+_STMT_START_KEYWORDS = frozenset({
+    "local", "while", "repeat", "if", "for", "function", "goto",
+    "break", "return",
+})
+
+
+def _needs_separator(left: Token, right: Token) -> Optional[str]:
+    """
+    Return the separator required between two adjacent non-ws tokens:
+      ' '  — keyword / identifier spacing
+      ';'  — statement boundary (space is not enough for Lua)
+      None — safe to glue
+    """
+    # ── Keyword / identifier spacing (must stay spaces) ──────────────────────
     if left.type == TT.KEYWORD and left.value in ("not", "and", "or", "return"):
-        if right.type in _ID_LIKE or (right.type == TT.OP and right.value in ("(", "-", "~", "#")):
-            return True
+        if right.type in _ID_LIKE or (
+            right.type == TT.OP and right.value in ("(", "-", "~", "#")
+        ):
+            return " "
+        if left.value == "return" and right.type in (TT.STRING, TT.LONGSTRING, TT.NUMBER):
+            return " "
+
     if right.type == TT.KEYWORD and right.value in ("and", "or", "not"):
         if left.type in _ID_LIKE:
-            return True
-    if left.type == TT.KEYWORD and left.value == "return":
-        if right.type in _ID_LIKE or right.type in (TT.STRING, TT.LONGSTRING, TT.NUMBER):
-            return True
-    return False
+            return " "
+
+    if left.type == TT.KEYWORD and left.value in (
+        "local", "function", "goto", "for", "while", "if", "elseif", "until",
+    ):
+        if right.type in _ID_LIKE:
+            return " "
+
+    if left.type == TT.KEYWORD and right.type == TT.KEYWORD:
+        return " "
+
+    # NUMBER/NAME before block keyword: `1 end`, `x then`
+    if left.type in (TT.NAME, TT.NUMBER) and right.type == TT.KEYWORD:
+        if right.value in _BLOCK_KEYWORDS:
+            return " "
+        if right.value in _STMT_START_KEYWORDS:
+            return ";"
+
+    # ── Statement boundaries — semicolon (space is illegal / ambiguous) ──────
+    # `o.E=AB E[x]=AA` — space still errors; need `AB;E`
+    if left.type in (TT.NAME, TT.NUMBER) and right.type == TT.NAME:
+        return ";"
+
+    # `)f`, `)(`, `]"x"`, `}{` — keywords after `)` are fine (`function()return`).
+    if left.type == TT.OP and left.value in (")", "]", "}"):
+        if right.type == TT.NAME:
+            return ";"
+        if right.type in (TT.STRING, TT.LONGSTRING):
+            return ";"
+        if right.type == TT.OP and right.value in ("(", "{"):
+            return ";"
+
+    if left.type in (TT.STRING, TT.LONGSTRING):
+        if right.type == TT.NAME:
+            return ";"
+        if right.type in (TT.STRING, TT.LONGSTRING):
+            return ";"
+        if right.type == TT.OP and right.value in ("(", "{"):
+            return ";"
+
+    # Fallback: two ID-like tokens that still need a space (e.g. keyword edge cases)
+    if left.type in _ID_LIKE and right.type in _ID_LIKE:
+        return " "
+
+    return None
 
 
 def _is_top_level_function(tokens: List[Token], idx: int) -> bool:
@@ -72,6 +133,14 @@ def _should_break_before(tokens: List[Token], idx: int) -> bool:
     return False
 
 
+def _emit_separator(out: List[Token], left: Token, right: Token, chars_saved: int) -> int:
+    sep = _needs_separator(left, right)
+    if sep is None:
+        return chars_saved
+    out.append(Token(TT.OP if sep == ";" else TT.SPACE, sep, right.pos))
+    return chars_saved - len(sep)
+
+
 def _strip_preserve(tokens: List[Token]) -> tuple[List[Token], int]:
     """Keep source newlines; collapse horizontal whitespace only."""
     chars_saved = 0
@@ -92,8 +161,16 @@ def _strip_preserve(tokens: List[Token]) -> tuple[List[Token], int]:
             pending_space = False
             continue
 
-        if pending_space and out and out[-1].type != TT.NEWLINE:
-            if _needs_space(out[-1], tok):
+        if out and out[-1].type != TT.NEWLINE:
+            # Prefer real separators over a collapsed space when required.
+            sep = _needs_separator(out[-1], tok)
+            if sep == ";":
+                out.append(Token(TT.OP, ";", tok.pos))
+                chars_saved -= 1
+            elif sep == " " and pending_space:
+                out.append(Token(TT.SPACE, " ", tok.pos))
+                chars_saved -= 1
+            elif sep == " ":
                 out.append(Token(TT.SPACE, " ", tok.pos))
                 chars_saved -= 1
         pending_space = False
@@ -122,8 +199,16 @@ def _strip_statements(tokens: List[Token]) -> tuple[List[Token], int]:
             chars_saved -= 1
 
         if i > 0 and out and out[-1].type != TT.NEWLINE:
-            if _needs_space(non_ws[i - 1], tok):
+            # Newline already acts as a statement break; only insert space/'; when glued.
+            prev = non_ws[i - 1]
+            sep = _needs_separator(prev, tok)
+            if sep == " ":
                 out.append(Token(TT.SPACE, " ", tok.pos))
+                chars_saved -= 1
+            elif sep == ";":
+                # Prefer newline over semicolon when we are about to break structurally;
+                # otherwise insert ';' so `)name` cannot glue on the same line.
+                out.append(Token(TT.OP, ";", tok.pos))
                 chars_saved -= 1
 
         out.append(tok)
@@ -147,7 +232,7 @@ def _strip_statements(tokens: List[Token]) -> tuple[List[Token], int]:
 
 
 def _strip_singleline(tokens: List[Token]) -> tuple[List[Token], int]:
-    """Original behaviour: collapse to one line."""
+    """Collapse to one line, inserting spaces or semicolons where Lua requires them."""
     non_ws = [
         t for t in tokens
         if t.type not in (TT.SPACE, TT.NEWLINE) and t.type != TT.EOF
@@ -159,9 +244,8 @@ def _strip_singleline(tokens: List[Token]) -> tuple[List[Token], int]:
 
     out: List[Token] = []
     for i, tok in enumerate(non_ws):
-        if i > 0 and _needs_space(non_ws[i - 1], tok):
-            out.append(Token(TT.SPACE, " ", tok.pos))
-            chars_saved -= 1
+        if i > 0:
+            chars_saved = _emit_separator(out, non_ws[i - 1], tok, chars_saved)
         out.append(tok)
 
     return out, chars_saved
