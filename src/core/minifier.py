@@ -166,6 +166,10 @@ def minify(
 
     source = source.replace("\r\n", "\n").replace("\r", "\n")
 
+    # Stormworks MC/addon Lua has no pcall — unwrap before any other pass.
+    from .passes.sw_runtime import unwrap_pcall
+    source, _pcall_unwrapped = unwrap_pcall(source)
+
     l3_fallback: tuple[str, MinifyStats] | None = None
     if level == 4:
         l3_fallback = minify(

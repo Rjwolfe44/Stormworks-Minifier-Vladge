@@ -321,4 +321,19 @@ class TestWhitespaceSafety:
         assert ");then" not in result
         assert ")then" in result or ") then" in result
 
+    def test_nil_true_false_before_name_gets_semicolon(self):
+        """`nil a` / `false x` need ';' — a space is still a hard syntax error."""
+        result, _ = minify("AA,AB,AC=true,false,nil\naH,aa=math.pi,math.pi*2", level=1)
+        assert "nil aH" not in result
+        assert "nil;aH" in result
+        result2, _ = minify("local x=false\ny=1", level=1)
+        assert "false y" not in result2 and "false;y" in result2
+
+    def test_pcall_unwrapped_for_stormworks(self):
+        src = 'useDiscrete=true\npcall(function() useDiscrete=property.getBool("Discrete Denoise") end)'
+        result, _ = minify(src, level=1)
+        assert "pcall" not in result
+        assert "property.getBool" in result
+        assert "useDiscrete" in result
+
 

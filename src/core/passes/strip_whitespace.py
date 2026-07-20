@@ -31,6 +31,9 @@ _STMT_START_KEYWORDS = frozenset({
     "break", "return", "end",
 })
 
+# Expression value keywords — `nil a` / `false local` need ';' (space is illegal).
+_VALUE_KEYWORDS = frozenset({"true", "false", "nil"})
+
 
 def _needs_separator(left: Token, right: Token) -> Optional[str]:
     """
@@ -57,6 +60,17 @@ def _needs_separator(left: Token, right: Token) -> Optional[str]:
     ):
         if right.type in _ID_LIKE:
             return " "
+
+    # `AA,AB,AC=true,false,nil aH=...` — space after nil/true/false is not a stmt break.
+    if left.type == TT.KEYWORD and left.value in _VALUE_KEYWORDS:
+        if right.type == TT.NAME:
+            return ";"
+        if right.type == TT.KEYWORD and right.value in _STMT_START_KEYWORDS:
+            return ";"
+        if right.type in (TT.STRING, TT.LONGSTRING):
+            return ";"
+        if right.type == TT.OP and right.value in ("(", "{"):
+            return ";"
 
     if left.type == TT.KEYWORD and right.type == TT.KEYWORD:
         # `end local` / `end if` need a statement break for Stormworks.
