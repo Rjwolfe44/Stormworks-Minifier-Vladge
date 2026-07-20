@@ -170,6 +170,10 @@ def minify(
     from .passes.sw_runtime import unwrap_pcall
     source, _pcall_unwrapped = unwrap_pcall(source)
 
+    # Eliminate elseif chains so trailing else/elseif cannot rebind to an inner if.
+    from .passes.desugar_elseif import desugar_elseif
+    source, _elseif_desugared = desugar_elseif(source)
+
     l3_fallback: tuple[str, MinifyStats] | None = None
     if level == 4:
         l3_fallback = minify(

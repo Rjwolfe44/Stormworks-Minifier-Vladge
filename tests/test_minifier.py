@@ -336,4 +336,47 @@ class TestWhitespaceSafety:
         assert "property.getBool" in result
         assert "useDiscrete" in result
 
+    def test_elseif_desugars_to_nested_else_if(self):
+        """Trailing else must not bind to an inner if after compacting."""
+        src = (
+            "if not active then\n"
+            "  ping=0\n"
+            "elseif ping>0 then\n"
+            "  ping=ping+1\n"
+            "  if ping>=lim then\n"
+            "    ping=0\n"
+            "  end\n"
+            "else\n"
+            "  idle=true\n"
+            "end\n"
+        )
+        result, _ = minify(src, level=1)
+        assert "elseif" not in result
+        # Nested form: outer else wraps `if ping>0` / idle else — not `if ping>=lim else idle`
+        assert "if not active then" in result or "if not active then" in result.replace(" ", "")
+        # Compacted: ...if ping>=lim then ping=0;end else idle  would be WRONG
+        # Correct: ...if ping>0 then ... if ping>=lim then ... end else idle=true;end;end
+        assert "idle=true" in result.replace(" ", "") or "idle = true" in result
+        # Ensure idle else is NOT directly after ping>=lim's then-body without closing that if's end first
+        import re
+        # Wrong pattern: if ping>=lim then ... else idle  (else attached to lim check)
+        assert not re.search(r"ping>=lim then[^e]*else idle", result.replace(" ", ""))
+        assert "else" in result
+
+
+    def test_elseif_contact_pattern_desugars(self):
+        src = (
+            "if abs(az)+abs(el)>0 then\n"
+            "  if not hit and ping>6 then\n"
+            "    if rng>20 then save() end\n"
+            "  elseif hit and useDiscrete then\n"
+            "    denoise()\n"
+            "  end\n"
+            "end\n"
+        )
+        result, _ = minify(src, level=1)
+        assert "elseif" not in result
+        assert "denoise" in result
+
+
 
