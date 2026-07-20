@@ -17,16 +17,18 @@ _STRUCT_BREAK_AFTER = frozenset({
 
 _STRUCT_BREAK_BEFORE = frozenset({"else", "elseif", "until"})
 
-# Keywords that continue / close a block — space (or nothing) after expr is fine.
-_BLOCK_KEYWORDS = frozenset({
-    "end", "else", "elseif", "until", "then", "do", "in",
+# Keywords that continue / close a block mid-construct — never force ';' before these
+# after `)` / `]` (e.g. `if(x)then`, `(a)and(b)`, `for i=1,n do`).
+_BLOCK_CONTINUE_KEYWORDS = frozenset({
+    "else", "elseif", "until", "then", "do", "in",
     "and", "or", "not",
 })
 
-# Keywords that start a new statement after an expression-ending token.
+# New statement (or function-body `return`/`end`) — Stormworks rejects `)local` / `)if`
+# without ';' even though stock Lua often accepts keyword adjacency.
 _STMT_START_KEYWORDS = frozenset({
     "local", "while", "repeat", "if", "for", "function", "goto",
-    "break", "return",
+    "break", "return", "end",
 })
 
 
@@ -34,7 +36,7 @@ def _needs_separator(left: Token, right: Token) -> Optional[str]:
     """
     Return the separator required between two adjacent non-ws tokens:
       ' '  — keyword / identifier spacing
-      ';'  — statement boundary (space is not enough for Lua)
+      ';'  — statement boundary (space is not enough for Stormworks Lua)
       None — safe to glue
     """
     # ── Keyword / identifier spacing (must stay spaces) ──────────────────────
@@ -57,11 +59,15 @@ def _needs_separator(left: Token, right: Token) -> Optional[str]:
             return " "
 
     if left.type == TT.KEYWORD and right.type == TT.KEYWORD:
+        # `end local` / `end if` need a statement break for Stormworks.
+        if left.value == "end" and right.value in _STMT_START_KEYWORDS:
+            return ";"
         return " "
 
-    # NUMBER/NAME before block keyword: `1 end`, `x then`
+    # NAME/NUMBER before block-continue: `1 end` is wrong — use ';' for stmt starts,
+    # space for `x then` / `1 do` style continuations.
     if left.type in (TT.NAME, TT.NUMBER) and right.type == TT.KEYWORD:
-        if right.value in _BLOCK_KEYWORDS:
+        if right.value in _BLOCK_CONTINUE_KEYWORDS:
             return " "
         if right.value in _STMT_START_KEYWORDS:
             return ";"
@@ -71,13 +77,15 @@ def _needs_separator(left: Token, right: Token) -> Optional[str]:
     if left.type in (TT.NAME, TT.NUMBER) and right.type == TT.NAME:
         return ";"
 
-    # `)f`, `)(`, `]"x"`, `}{` — keywords after `)` are fine (`function()return`).
+    # `)f`, `)local`, `)if`, `ag()for`, `]if`, `}{`, etc.
     if left.type == TT.OP and left.value in (")", "]", "}"):
         if right.type == TT.NAME:
             return ";"
         if right.type in (TT.STRING, TT.LONGSTRING):
             return ";"
         if right.type == TT.OP and right.value in ("(", "{"):
+            return ";"
+        if right.type == TT.KEYWORD and right.value in _STMT_START_KEYWORDS:
             return ";"
 
     if left.type in (TT.STRING, TT.LONGSTRING):
@@ -86,6 +94,8 @@ def _needs_separator(left: Token, right: Token) -> Optional[str]:
         if right.type in (TT.STRING, TT.LONGSTRING):
             return ";"
         if right.type == TT.OP and right.value in ("(", "{"):
+            return ";"
+        if right.type == TT.KEYWORD and right.value in _STMT_START_KEYWORDS:
             return ";"
 
     # Fallback: two ID-like tokens that still need a space (e.g. keyword edge cases)

@@ -245,7 +245,7 @@ class TestEdgeCases:
         # Expected structure: function a(x, y, a_new) ... end function b(x, y, a_new) return a(x, -y, a_new) end
         # Verifies that function calls do not resolve to local parameter names.
         import re
-        match = re.search(r"function\s+\w+\(\w+,\w+,(\w+)\)return\s+(\w+)\(", result)
+        match = re.search(r"function\s+\w+\(\w+,\w+,(\w+)\);?return\s+(\w+)\(", result)
         assert match is not None, f"Could not parse function in minified result: {result}"
         param_name, func_called = match.groups()
         assert func_called != param_name, f"Function call {func_called} incorrectly renamed to local param {param_name}!"
@@ -297,11 +297,28 @@ class TestWhitespaceSafety:
         assert ");f" in result
         assert "and al" in result  # keyword spacing preserved
 
-    def test_function_body_keyword_still_glues(self):
-        """`)return` / `)end` are valid — do not force a semicolon before keywords."""
-        result, _ = minify("local function f() return 1 end", level=1)
-        assert ");return" not in result
-        assert ")return" in result or ") return" in result
-        assert ");end" not in result
+    def test_paren_before_stmt_keywords_gets_semicolon(self):
+        """Stormworks rejects `)local` / `)if` / `)for` without a separator."""
+        cases = [
+            ("f()\nlocal x=1", ");local"),
+            ("f()\nif x then end", ");if"),
+            ("f()\nfor i=1,2 do end", ");for"),
+            ("ag()\nfor B=1,P do end", ");for"),
+            ("b[h]\nlocal m=1", "];local"),
+            ("M[E][X]\nif not D then end", "];if"),
+            ("local function f() return 1 end", ");return"),
+        ]
+        for src, needle in cases:
+            result, _ = minify(src, level=1)
+            assert needle in result, f"{src!r} => {result!r} (expected {needle})"
+            assert ")local" not in result
+            assert ")if" not in result
+            assert ")for" not in result
+
+    def test_if_then_not_broken_by_semicolon(self):
+        """`if(x)then` must not become `if(x);then`."""
+        result, _ = minify("if(x)then y=1 end", level=1)
+        assert ");then" not in result
+        assert ")then" in result or ") then" in result
 
 
