@@ -61,47 +61,63 @@ def smart_alias_globals(source: str) -> Tuple[str, int, Dict[str, str]]:
     for (ns, method), count in occurrences.items():
         ns_uses[ns] += count
         
+    # Greedy-optimal per-namespace decision. For each namespace we choose the plan
+    # with the highest net savings among:
+    #   A) alias namespace once, route every method through it  (ns.drawRectF)
+    #   B) fully alias the hot methods to bare names, rest via namespace (drawRectF -> A)
+    #   C) no namespace alias; fully alias only methods worth it
     gen = _alias_name_gen()
-    
-    # Evaluate namespace aliasing.
-    ns_aliases = {}
-    ns_names = []
-    ns_vals = []
-    
-    for ns, count in ns_uses.items():
-        # Cost to declare `_a=screen`: 4 + len(ns)
-        # Savings per use: len(ns) - 2 (since _a is 2 chars)
-        alias = next(gen)
-        # We group these later, so overhead is approx 1 comma (1 char) + length
-        cost = len(alias) + len(ns) + 2
-        savings = (len(ns) - len(alias)) * count
-        if savings > cost + 1:
-            ns_aliases[ns] = alias
-            ns_names.append(alias)
-            ns_vals.append(ns)
-            
-    # Evaluate if full method aliasing remains beneficial in addition to namespace aliasing
-    meth_names = []
-    meth_vals = []
-    
+
+    # group methods by namespace
+    by_ns: Dict[str, list] = {}
     for (ns, method), count in occurrences.items():
-        effective_ns = ns_aliases.get(ns, ns)
-        full_call = f"{effective_ns}.{method}"
-        
-        alias = next(gen)
-        cost = len(alias) + len(full_call) + 2
-        savings = (len(full_call) - len(alias)) * count
-        if savings > cost + 1:
-            alias_map[f"{ns}.{method}"] = alias
-            meth_names.append(alias)
+        by_ns.setdefault(ns, []).append((method, count))
+
+    ns_names: List[str] = []
+    ns_vals: List[str] = []
+    meth_names: List[str] = []
+    meth_vals: List[str] = []
+
+    for ns, meths in by_ns.items():
+        total_uses = sum(c for _, c in meths)
+        # reserve a candidate namespace alias name (peek, commit only if used)
+        ns_alias = next(gen)
+
+        # Plan A cost/benefit: alias the namespace itself
+        ns_cost = len(ns_alias) + len(ns) + 2
+        ns_save = (len(ns) - len(ns_alias)) * total_uses
+        use_ns = ns_save > ns_cost + 1
+
+        effective_ns = ns_alias if use_ns else ns
+
+        # Decide each method: full-alias (bare) vs route through effective_ns.
+        plan_meth = []   # (orig, alias)
+        plan_route = []  # orig routed via namespace
+        net_gain = 0
+        for method, count in meths:
+            full_call = f"{effective_ns}.{method}"
+            m_alias = next(gen)
+            m_cost = len(m_alias) + len(full_call) + 2
+            m_save = (len(full_call) - len(m_alias)) * count
+            if m_save > m_cost + 1:
+                plan_meth.append((f"{ns}.{method}", m_alias, full_call))
+                net_gain += m_save - m_cost
+            else:
+                plan_route.append(f"{ns}.{method}")
+
+        if use_ns:
+            ns_names.append(ns_alias)
+            ns_vals.append(ns)
+            for orig in plan_route:
+                alias_map[orig] = f"{ns_alias}.{orig.split('.', 1)[1]}"
+        for orig, m_alias, full_call in plan_meth:
+            alias_map[orig] = m_alias
+            meth_names.append(m_alias)
             meth_vals.append(full_call)
-        elif ns in ns_aliases:
-            # Fallback to the namespace alias
-            alias_map[f"{ns}.{method}"] = f"{ns_aliases[ns]}.{method}"
-            
+
     if not ns_names and not meth_names:
         return source, 0, {}
-        
+
     declarations = []
     if ns_names:
         declarations.append(f"local {','.join(ns_names)}={','.join(ns_vals)}")

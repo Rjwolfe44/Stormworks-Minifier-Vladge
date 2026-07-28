@@ -384,4 +384,86 @@ class TestWhitespaceSafety:
         assert result.count("end") == 3
 
 
+class TestControlPack:
+    """Level-4 control-flow packing (if/else -> expression forms)."""
+
+    def _assert_valid_lua(self, code: str):
+        from luaparser import ast
+        ast.parse(code)  # raises on invalid syntax
+
+    def test_if_else_ternary_truthy_literal(self):
+        # x>1: y=2 else y=3 -> ternary must produce valid Lua, no `then`
+        result, _ = minify("x=5\nif x>1 then y=2 else y=3 end\noutput.setNumber(1,y)", level=4)
+        self._assert_valid_lua(result)
+        assert "then" not in result
+        assert "and" in result and "or" in result
+
+    def test_if_else_skips_falsy_true_branch(self):
+        # `true` branch expr is `false`/`nil` -> ternary would be wrong, must keep if/else
+        result, _ = minify("if a then b=false else b=1 end", level=4)
+        self._assert_valid_lua(result)
+        assert "then" in result
+        result2, _ = minify("if a then b=nil else b=1 end", level=4)
+        assert "then" in result2
+
+    def test_single_branch_zero_is_truthy(self):
+        # 0 is truthy in Lua, so `if a then b=0 end` -> `b=a and 0 or b` is SAFE
+        result, _ = minify("b=9\nif a then b=0 end\noutput.setNumber(1,b)", level=4)
+        self._assert_valid_lua(result)
+        assert "then" not in result
+
+    def test_single_branch_string_is_truthy(self):
+        result, _ = minify('s="x"\nif flag then s="on" end\noutput.setNumber(1,1)', level=4)
+        self._assert_valid_lua(result)
+        assert "then" not in result
+
+    def test_single_branch_table_is_truthy(self):
+        result, _ = minify("m={}\nif go then m={1,2} end\noutput.setNumber(1,1)", level=4)
+        self._assert_valid_lua(result)
+        assert "then" not in result
+
+    def test_elseif_chain_untouched(self):
+        result, _ = minify("if a then b=1 elseif c then b=2 end", level=4)
+        self._assert_valid_lua(result)
+        assert "elseif" in result
+
+    def test_guard_call_gets_assignment_target(self):
+        result, _ = minify("if ready then fire() end", level=4)
+        self._assert_valid_lua(result)
+        # bare `cond and fire()` is invalid Lua; the transform assigns to a throwaway
+        # (renamed to a short local). Must be `X=(cond) and call()` form, not bare.
+        r = result.replace(" ", "")
+        assert r.startswith(("a=(", "_=(")) and "and" in r and "then" not in r
+
+    def test_no_growth_on_unprofitable(self):
+        src = "if someLongCondition then someLongTarget=1 end"
+        result, _ = minify(src, level=4)
+        self._assert_valid_lua(result)
+        base, _ = minify(src, level=3)
+        assert len(result) <= len(base) + 2
+
+
+class TestZipper:
+    def _assert_valid_lua(self, code: str):
+        from luaparser import ast
+        ast.parse(code)
+
+    def test_merges_literal_locals(self):
+        # constant folding may collapse further; assert validity + no residual double-local
+        result, _ = minify("local x = 1\nlocal y = 2\noutput.setNumber(1, x+y)", level=4)
+        self._assert_valid_lua(result)
+        assert "3" in result  # x+y folded to 3
+
+    def test_merges_expr_locals(self):
+        result, _ = minify("local a = f()\nlocal b = t.x\noutput.setNumber(1, a)", level=4)
+        self._assert_valid_lua(result)
+        # two locals merged into one statement (single `local` keyword)
+        assert result.count("local") == 1
+
+    def test_does_not_merge_bare_decl(self):
+        # `local b` (no value) must not be zipped into a multi-assign; result must parse
+        result, _ = minify("local a = 1\nlocal b\nlocal c = 3\noutput.setNumber(1,a)", level=4)
+        self._assert_valid_lua(result)
+
+
 

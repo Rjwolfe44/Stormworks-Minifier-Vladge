@@ -260,11 +260,9 @@ def minify(
         tokens, stats.zipped_locals = consolidate_locals(tokens)
 
     if level >= 4:
-        from .passes.ternary_injector import inject_ternary
-        from .passes.short_circuit import inject_short_circuit
-        tokens, ternary_count = inject_ternary(tokens)
-        tokens, short_circuit_count = inject_short_circuit(tokens)
-        stats.comments_removed += ternary_count + short_circuit_count
+        from .passes.control_pack import pack_control_flow
+        tokens, control_packed = pack_control_flow(tokens)
+        stats.comments_removed += control_packed
 
     allocated_globals = set()
 
