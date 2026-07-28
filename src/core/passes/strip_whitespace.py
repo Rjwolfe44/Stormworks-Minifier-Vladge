@@ -1,6 +1,19 @@
 """
 Whitespace collapsing pass.
 Removes or minimises spaces/newlines while keeping the Lua token stream valid.
+
+Separator contract (Lua 5.3 grammar):
+  * `;` only when the left token ends a value/statement AND the right token can
+    start a new value/statement that Lua would otherwise mis-parse as a
+    continuation of the left (call chain, string call, or pure gibberish).
+  * ` ` (space) when the two tokens merely need to be separated so they do not
+    merge into a different token (`foo bar`, `a then`, `1 do`).
+  * `None` when the pair is unambiguous and can glue safely (`)local`, `]end`,
+    `)then`, `"a"("b")` handled by Lua's call syntax).
+
+Statement-level keywords (`local`, `if`, `for`, `while`, `function`, `repeat`,
+`return`, `end`, `break`, `goto`, `do`) always start a fresh statement context —
+they can glue after `)`, `]`, `}`, or a string without any separator.
 """
 
 from typing import List, Literal, Optional
@@ -17,32 +30,73 @@ _STRUCT_BREAK_AFTER = frozenset({
 
 _STRUCT_BREAK_BEFORE = frozenset({"else", "elseif", "until"})
 
-# Keywords that continue / close a block mid-construct — never force ';' before these
-# after `)` / `]` (e.g. `if(x)then`, `(a)and(b)`, `for i=1,n do`).
+# Keywords that continue / close a block mid-construct — these continue the
+# current construct, so the left token is *not* ending a value for them.
 _BLOCK_CONTINUE_KEYWORDS = frozenset({
     "else", "elseif", "until", "then", "do", "in",
     "and", "or", "not",
 })
 
-# New statement (or function-body `return`/`end`) — Stormworks rejects `)local` / `)if`
-# without ';' even though stock Lua often accepts keyword adjacency.
-_STMT_START_KEYWORDS = frozenset({
-    "local", "while", "repeat", "if", "for", "function", "goto",
-    "break", "return", "end",
+# Statement-starting keywords that can begin a new Lua statement after a value
+# without needing `;` — Lua's grammar already starts a new statement there.
+# Note: `end`/`return` close the current block, so they are handled via the
+# keyword-keyword rule rather than needing `;` after a value.
+_STMT_KEYWORDS = frozenset({
+    "local", "if", "for", "while", "function", "repeat",
+    "break", "goto", "do",
 })
 
-# Expression value keywords — `nil a` / `false local` need ';' (space is illegal).
+# Literal value keywords — `nil a` / `true x` / `false {` are syntax errors.
 _VALUE_KEYWORDS = frozenset({"true", "false", "nil"})
+
+# Tokens that, when preceded by a value-ending token, Lua would parse as a
+# continuation of the same expression (function call, index, string call).
+# These are the only pairs that require a real `;` statement break.
+_VALUE_CONTINUATION_TOKENS = frozenset({"(", "{"})
+
+
+def _is_value_end(tok: Token) -> bool:
+    """True when `tok` can legally terminate a value expression."""
+    if tok.type == TT.NAME:
+        return True
+    if tok.type == TT.NUMBER:
+        return True
+    if tok.type in (TT.STRING, TT.LONGSTRING):
+        return True
+    if tok.type == TT.OP and tok.value in (")", "]", "}"):
+        return True
+    if tok.type == TT.KEYWORD and tok.value in _VALUE_KEYWORDS:
+        return True
+    return False
 
 
 def _needs_separator(left: Token, right: Token) -> Optional[str]:
     """
     Return the separator required between two adjacent non-ws tokens:
       ' '  — keyword / identifier spacing
-      ';'  — statement boundary (space is not enough for Stormworks Lua)
+      ';'  — statement boundary (space is not enough to disambiguate)
       None — safe to glue
     """
-    # ── Keyword / identifier spacing (must stay spaces) ──────────────────────
+    # ── Semicolon rules ──────────────────────────────────────────────────────
+    # `)name` / `]name` / `}name` — a name cannot follow a closing token in an
+    # expression (it would be a call argument list without an operator), so
+    # this is always a statement boundary and space alone is not enough for
+    # Stormworks.
+    if left.type == TT.OP and left.value in (")", "]", "}") and right.type == TT.NAME:
+        return ";"
+
+    # `a b`, `1 x`, `true nil` — two identifier-like tokens where a space would
+    # still parse as gibberish; `;` is the only safe statement break.
+    if left.type == TT.NAME and right.type == TT.NAME:
+        return ";"
+    if left.type == TT.NUMBER and right.type == TT.NAME:
+        return ";"
+    if left.type == TT.KEYWORD and left.value in _VALUE_KEYWORDS:
+        if right.type in (TT.NAME, TT.NUMBER):
+            return ";"
+
+    # ── Space rules: tokens must not merge into a single token ────────────────
+    # `not`/`and`/`or`/`return` must be separated from what follows.
     if left.type == TT.KEYWORD and left.value in ("not", "and", "or", "return"):
         if right.type in _ID_LIKE or (
             right.type == TT.OP and right.value in ("(", "-", "~", "#")
@@ -51,68 +105,29 @@ def _needs_separator(left: Token, right: Token) -> Optional[str]:
         if left.value == "return" and right.type in (TT.STRING, TT.LONGSTRING, TT.NUMBER):
             return " "
 
+    # `x and`, `1 or`, `foo not` — right-hand keyword must not merge with left name/number.
     if right.type == TT.KEYWORD and right.value in ("and", "or", "not"):
         if left.type in _ID_LIKE:
             return " "
 
+    # `local x`, `function f`, `for i`, `if a`, `while x`, `until n` — keywords
+    # taking a name/expression must not glue to it.
     if left.type == TT.KEYWORD and left.value in (
         "local", "function", "goto", "for", "while", "if", "elseif", "until",
     ):
         if right.type in _ID_LIKE:
             return " "
 
-    # `AA,AB,AC=true,false,nil aH=...` — space after nil/true/false is not a stmt break.
-    if left.type == TT.KEYWORD and left.value in _VALUE_KEYWORDS:
-        if right.type == TT.NAME:
-            return ";"
-        if right.type == TT.KEYWORD and right.value in _STMT_START_KEYWORDS:
-            return ";"
-        if right.type in (TT.STRING, TT.LONGSTRING):
-            return ";"
-        if right.type == TT.OP and right.value in ("(", "{"):
-            return ";"
-
-    if left.type == TT.KEYWORD and right.type == TT.KEYWORD:
-        # `end local` / `end if` need a statement break for Stormworks.
-        if left.value == "end" and right.value in _STMT_START_KEYWORDS:
-            return ";"
+    # Value-end followed by a block-continue keyword — space is enough
+    # (`foo then`, `1 do`, `(a) and (b)`).
+    if _is_value_end(left) and right.type == TT.KEYWORD and right.value in _BLOCK_CONTINUE_KEYWORDS:
         return " "
 
-    # NAME/NUMBER before block-continue: `1 end` is wrong — use ';' for stmt starts,
-    # space for `x then` / `1 do` style continuations.
-    if left.type in (TT.NAME, TT.NUMBER) and right.type == TT.KEYWORD:
-        if right.value in _BLOCK_CONTINUE_KEYWORDS:
-            return " "
-        if right.value in _STMT_START_KEYWORDS:
-            return ";"
+    # Two keywords — `end then` etc. need separation so they don't merge.
+    if left.type == TT.KEYWORD and right.type == TT.KEYWORD:
+        return " "
 
-    # ── Statement boundaries — semicolon (space is illegal / ambiguous) ──────
-    # `o.E=AB E[x]=AA` — space still errors; need `AB;E`
-    if left.type in (TT.NAME, TT.NUMBER) and right.type == TT.NAME:
-        return ";"
-
-    # `)f`, `)local`, `)if`, `ag()for`, `]if`, `}{`, etc.
-    if left.type == TT.OP and left.value in (")", "]", "}"):
-        if right.type == TT.NAME:
-            return ";"
-        if right.type in (TT.STRING, TT.LONGSTRING):
-            return ";"
-        if right.type == TT.OP and right.value in ("(", "{"):
-            return ";"
-        if right.type == TT.KEYWORD and right.value in _STMT_START_KEYWORDS:
-            return ";"
-
-    if left.type in (TT.STRING, TT.LONGSTRING):
-        if right.type == TT.NAME:
-            return ";"
-        if right.type in (TT.STRING, TT.LONGSTRING):
-            return ";"
-        if right.type == TT.OP and right.value in ("(", "{"):
-            return ";"
-        if right.type == TT.KEYWORD and right.value in _STMT_START_KEYWORDS:
-            return ";"
-
-    # Fallback: two ID-like tokens that still need a space (e.g. keyword edge cases)
+    # Fallback: any two identifier-like tokens still need a space.
     if left.type in _ID_LIKE and right.type in _ID_LIKE:
         return " "
 
@@ -186,7 +201,6 @@ def _strip_preserve(tokens: List[Token]) -> tuple[List[Token], int]:
             continue
 
         if out and out[-1].type != TT.NEWLINE:
-            # Prefer real separators over a collapsed space when required.
             sep = _needs_separator(out[-1], tok)
             if sep == ";":
                 out.append(Token(TT.OP, ";", tok.pos))
@@ -223,15 +237,12 @@ def _strip_statements(tokens: List[Token]) -> tuple[List[Token], int]:
             chars_saved -= 1
 
         if i > 0 and out and out[-1].type != TT.NEWLINE:
-            # Newline already acts as a statement break; only insert space/'; when glued.
             prev = non_ws[i - 1]
             sep = _needs_separator(prev, tok)
             if sep == " ":
                 out.append(Token(TT.SPACE, " ", tok.pos))
                 chars_saved -= 1
             elif sep == ";":
-                # Prefer newline over semicolon when we are about to break structurally;
-                # otherwise insert ';' so `)name` cannot glue on the same line.
                 out.append(Token(TT.OP, ";", tok.pos))
                 chars_saved -= 1
 

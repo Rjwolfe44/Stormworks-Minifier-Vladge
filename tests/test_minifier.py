@@ -297,23 +297,30 @@ class TestWhitespaceSafety:
         assert ");f" in result
         assert "and al" in result  # keyword spacing preserved
 
-    def test_paren_before_stmt_keywords_gets_semicolon(self):
-        """Stormworks rejects `)local` / `)if` / `)for` without a separator."""
+    def test_paren_before_stmt_keywords_glues(self):
+        """`)local` / `)if` / `)for` glue cleanly — Lua starts a new statement there."""
         cases = [
-            ("f()\nlocal x=1", ");local"),
-            ("f()\nif x then end", ");if"),
-            ("f()\nfor i=1,2 do end", ");for"),
-            ("ag()\nfor B=1,P do end", ");for"),
-            ("b[h]\nlocal m=1", "];local"),
-            ("M[E][X]\nif not D then end", "];if"),
-            ("local function f() return 1 end", ");return"),
+            "f()\nlocal x=1",
+            "f()\nif x then end",
+            "f()\nfor i=1,2 do end",
+            "ag()\nfor B=1,P do end",
+            "b[h]\nlocal m=1",
+            "M[E][X]\nif not D then end",
         ]
-        for src, needle in cases:
+        for src in cases:
             result, _ = minify(src, level=1)
-            assert needle in result, f"{src!r} => {result!r} (expected {needle})"
-            assert ")local" not in result
-            assert ")if" not in result
-            assert ")for" not in result
+            # no wasted ';' before statement keywords after ')' / ']'
+            assert ");local" not in result, f"{src!r} => {result!r}"
+            assert ");if" not in result
+            assert ");for" not in result
+            assert "];local" not in result
+            assert "];if" not in result
+
+    def test_paren_before_name_gets_semicolon(self):
+        """`)name` is still a hard statement break — a space is not enough."""
+        result, _ = minify("local x=f()\ng=1", level=1)
+        assert ");g" in result or ";g" in result
+        assert ")g" not in result
 
     def test_if_then_not_broken_by_semicolon(self):
         """`if(x)then` must not become `if(x);then`."""
@@ -336,8 +343,8 @@ class TestWhitespaceSafety:
         assert "property.getBool" in result
         assert "useDiscrete" in result
 
-    def test_elseif_desugars_to_nested_else_if(self):
-        """Trailing else must not bind to an inner if after compacting."""
+    def test_elseif_preserved_and_binds_correctly(self):
+        """Trailing else must stay sibling to the elseif chain, not rebind inward."""
         src = (
             "if not active then\n"
             "  ping=0\n"
@@ -351,20 +358,16 @@ class TestWhitespaceSafety:
             "end\n"
         )
         result, _ = minify(src, level=1)
-        assert "elseif" not in result
-        # Nested form: outer else wraps `if ping>0` / idle else — not `if ping>=lim else idle`
-        assert "if not active then" in result or "if not active then" in result.replace(" ", "")
-        # Compacted: ...if ping>=lim then ping=0;end else idle  would be WRONG
-        # Correct: ...if ping>0 then ... if ping>=lim then ... end else idle=true;end;end
-        assert "idle=true" in result.replace(" ", "") or "idle = true" in result
-        # Ensure idle else is NOT directly after ping>=lim's then-body without closing that if's end first
+        # elseif stays (shorter than else-if-end); structure must be preserved
+        assert "elseif" in result
+        assert "idle=true" in result.replace(" ", "")
         import re
-        # Wrong pattern: if ping>=lim then ... else idle  (else attached to lim check)
+        # else must NOT bind to the inner `if ping>=lim` — it follows the inner `end`
         assert not re.search(r"ping>=lim then[^e]*else idle", result.replace(" ", ""))
         assert "else" in result
 
 
-    def test_elseif_contact_pattern_desugars(self):
+    def test_elseif_contact_pattern_binds_correctly(self):
         src = (
             "if abs(az)+abs(el)>0 then\n"
             "  if not hit and ping>6 then\n"
@@ -375,8 +378,10 @@ class TestWhitespaceSafety:
             "end\n"
         )
         result, _ = minify(src, level=1)
-        assert "elseif" not in result
+        # elseif survives and stays bound to `if not hit...` under the outer if
+        assert "elseif" in result
         assert "denoise" in result
+        assert result.count("end") == 3
 
 
 
