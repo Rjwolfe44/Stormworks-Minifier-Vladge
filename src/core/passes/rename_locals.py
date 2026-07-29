@@ -45,7 +45,7 @@ def rename_locals(tokens: List[Token], reserved_names: Set[str] = None, obfuscat
 
 def _collect_map(scope: Scope, out: Dict[str, str]):
     """Flatten scope tree into {original: new} — for display only (may collide)."""
-    for vi in scope.locals.values():
+    for vi in list(scope.locals.values()) + scope.shadowed:
         if vi.new_name and vi.new_name != vi.original_name:
             out[vi.original_name] = vi.new_name
     for child in scope.children:
@@ -105,7 +105,12 @@ def _apply_renames(tokens: List[Token], root: Scope) -> List[Token]:
                     is_key = True
 
             if not is_prop and not is_key and not tok.is_global:
-                resolved = _lookup_in_scopes(tok.value, current_scopes, i)
+                # A declaration token resolves to the variable it declares,
+                # regardless of visibility windows (which only govern reads).
+                if i in decl_at:
+                    resolved = decl_at[i]
+                else:
+                    resolved = _lookup_in_scopes(tok.value, current_scopes, i)
                 if resolved and resolved.new_name and resolved.new_name != tok.value:
                     new_tokens[i] = Token(TT.NAME, resolved.new_name, tok.pos)
 
@@ -128,25 +133,36 @@ def _lookup_in_scopes(name: str, scope_stack: List[Scope], token_idx: int = -1) 
     falls within the scope's range. This prevents a parameter like 'function foo(a,b,foo)'
     from incorrectly shadowing the global 'foo' at call sites in other functions.
     """
+    def _visible(vi: "VarInfo", scope: Scope) -> bool:
+        if token_idx < 0:
+            return True
+        # The variable must be declared BEFORE this usage
+        if vi.declaration_idx > token_idx:
+            return False
+        # Reads before the initialiser's end resolve to the OUTER binding
+        if vi.visible_from_idx >= 0 and token_idx < vi.visible_from_idx:
+            return False
+        if vi.visible_until_idx >= 0 and token_idx >= vi.visible_until_idx:
+            return False
+        # The scope must still be open at this token position
+        if scope.end_idx > 0 and token_idx > scope.end_idx:
+            return False
+        return True
+
     for scope in reversed(scope_stack):
-        if name in scope.locals:
-            vi = scope.locals[name]
-            # If a token index is provided, verify this scope actually covers it.
-            # For parameters (is_param=True), their scope must contain token_idx.
-            # For regular locals, their declaration must precede token_idx.
-            if token_idx >= 0:
-                # The variable must be declared BEFORE this usage
-                if vi.declaration_idx > token_idx:
-                    continue
-                # The scope must still be open at this token position
-                if scope.end_idx > 0 and token_idx > scope.end_idx:
-                    continue
+        vi = scope.locals.get(name)
+        if vi is not None and _visible(vi, scope):
             return vi
+        # Reads that belong to an earlier same-name declaration in this scope
+        # (e.g. the RHS of `local a = a + 1`) resolve to the shadowed binding.
+        for vi in reversed(scope.shadowed):
+            if vi.original_name == name and _visible(vi, scope):
+                return vi
     return None
 
 
 def _index_decls(scope: Scope, out: Dict[int, "VarInfo"]):
-    for vi in scope.locals.values():
+    for vi in list(scope.locals.values()) + scope.shadowed:
         out[vi.declaration_idx] = vi
     for child in scope.children:
         _index_decls(child, out)

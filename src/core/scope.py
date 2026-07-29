@@ -19,11 +19,16 @@ class VarInfo:
     """
     original_name: str
     new_name: str = ""
-    declaration_idx: int = 0   # Token index where the variable is first declared
-    last_use_idx: int = 0      # Token index of the variable's final reference
-    use_count: int = 0         # Total number of times this variable is referenced
-    is_param: bool = False     # Indicates if the variable is a function parameter
-    scope: "Scope" = None      # Reference to the Scope instance where it was declared
+    declaration_idx: int = 0    # Token index where the variable is first declared
+    last_use_idx: int = 0       # Token index of the variable's final reference
+    use_count: int = 0          # Total number of times this variable is referenced
+    is_param: bool = False      # Indicates if the variable is a function parameter
+    scope: "Scope" = None       # Reference to the Scope instance where it was declared
+    # Visibility window (Lua 5.3): a local declared with an initialiser only
+    # becomes visible AFTER its whole RHS; -1 means "from declaration" /
+    # "until scope end" (parameters, loop vars, `local function`).
+    visible_from_idx: int = -1  # First token index where reads resolve to this var
+    visible_until_idx: int = -1  # First token index where reads NO LONGER resolve (shadowed)
 
 
 @dataclass
@@ -36,11 +41,15 @@ class Scope:
     children: List["Scope"] = field(default_factory=list)
     # Dictionary mapping original variable names to VarInfo strictly for variables declared in THIS scope
     locals: Dict[str, VarInfo] = field(default_factory=dict)
+    # Declarations overwritten by a later same-name declaration in THIS scope
+    # (e.g. `local a = 1 local a = a + 1`). Kept so range-aware lookups can
+    # still resolve reads that belong to the earlier binding.
+    shadowed: List[VarInfo] = field(default_factory=list)
     # The inclusive token index range defining the boundaries of this specific scope block
     start_idx: int = 0
     end_idx: int = 0
 
-    def declare(self, name: str, idx: int, is_param: bool = False) -> VarInfo:
+    def declare(self, name: str, idx: int, is_param: bool = False, visible_from: int = -1) -> VarInfo:
         vi = VarInfo(
             original_name=name,
             declaration_idx=idx,
@@ -48,7 +57,12 @@ class Scope:
             use_count=0,
             is_param=is_param,
             scope=self,
+            visible_from_idx=visible_from,
         )
+        if name in self.locals:
+            old = self.locals[name]
+            old.visible_until_idx = visible_from if visible_from >= 0 else idx
+            self.shadowed.append(old)
         self.locals[name] = vi
         return vi
 
@@ -89,6 +103,93 @@ class Scope:
 _SCOPE_OPEN = frozenset({"do", "then", "repeat", "function"})
 _SCOPE_CLOSE = frozenset({"end", "until"})
 
+# Tokens that can end an expression (used by the statement-end heuristic).
+_EXPR_END_TYPES = (TT.NAME, TT.NUMBER, TT.STRING, TT.LONGSTRING)
+_EXPR_END_OPS = frozenset({")", "]", "}", "..."})
+_EXPR_END_KWS = frozenset({"true", "false", "nil", "end", "until"})
+# Tokens that continue an expression across a newline.
+_EXPR_CONT_OPS = frozenset({
+    "+", "-", "*", "/", "//", "%", "^", "#", "..",
+    "==", "~=", "<", ">", "<=", ">=", "(", "[", "{", ".", ":", ",",
+})
+_EXPR_CONT_KWS = frozenset({"and", "or"})
+# Keywords that always terminate a `local` statement at depth 0.
+_STMT_END_KWS = frozenset({
+    "local", "return", "break", "else", "elseif", "then", "in", "goto",
+})
+
+
+def _meaningful_before(tokens: List[Token], i: int) -> Token | None:
+    j = i - 1
+    while j >= 0 and tokens[j].type in (TT.SPACE, TT.NEWLINE, TT.COMMENT, TT.LONGCOMMENT):
+        j -= 1
+    return tokens[j] if j >= 0 else None
+
+
+def _meaningful_after(tokens: List[Token], i: int, n: int) -> Token | None:
+    j = i + 1
+    while j < n and tokens[j].type in (TT.SPACE, TT.NEWLINE, TT.COMMENT, TT.LONGCOMMENT):
+        j += 1
+    return tokens[j] if j < n else None
+
+
+def _find_local_stmt_end(tokens: List[Token], start: int, n: int) -> int:
+    """
+    Return the token index that terminates a `local a, b = <rhs>` statement,
+    where <rhs> begins at `start`. The returned index is where the declared
+    names must come into scope: the whole RHS evaluates with the new locals
+    NOT yet bound (Lua 5.3 scoping — even closures in the RHS capture the
+    outer binding of the same name).
+
+    Must work on whitespace-stripped streams too (no NEWLINE tokens), so the
+    terminator is detected structurally: at depth 0, when the previous
+    meaningful token completes an expression and the current token cannot
+    continue one, the statement ended before the current token.
+    """
+    def _ends_expr(t: Token) -> bool:
+        return (
+            t.type in _EXPR_END_TYPES
+            or (t.type == TT.OP and t.value in _EXPR_END_OPS)
+            or (t.type == TT.KEYWORD and t.value in _EXPR_END_KWS)
+        )
+
+    def _continues_expr(t: Token) -> bool:
+        if t.type == TT.OP and t.value in _EXPR_CONT_OPS:
+            return True
+        if t.type == TT.KEYWORD and t.value in _EXPR_CONT_KWS:
+            return True
+        if t.type in (TT.STRING, TT.LONGSTRING):
+            return True  # call with string arg: f "x"
+        return False
+
+    depth = 0  # block depth (function/if/for/while/do/repeat) inside the RHS
+    prev: Token | None = None
+    i = start
+    while i < n:
+        t = tokens[i]
+        if t.type == TT.EOF:
+            return i
+        if t.type in (TT.SPACE, TT.NEWLINE, TT.COMMENT, TT.LONGCOMMENT):
+            i += 1
+            continue
+        if depth == 0 and prev is not None and _ends_expr(prev) and not _continues_expr(t):
+            return i  # new statement starts here
+        if t.type == TT.KEYWORD:
+            v = t.value
+            if v in ("function", "if", "for", "while", "do", "repeat"):
+                depth += 1
+            elif v in ("end", "until"):
+                if depth == 0:
+                    return i
+                depth -= 1
+            elif depth == 0 and v in _STMT_END_KWS:
+                return i
+        elif t.type == TT.OP and t.value == ";" and depth == 0:
+            return i
+        prev = t
+        i += 1
+    return n
+
 
 def build_scope_tree(tokens: List[Token]) -> Scope:
     """
@@ -112,6 +213,14 @@ def build_scope_tree(tokens: List[Token]) -> Scope:
     # Nested `while … do` / bare `do` inside that for must still open children.
     pending_for_do: List[bool] = []
 
+    # Deferred local declarations: names in `local a, b = <rhs>` come into scope
+    # only AFTER the whole RHS is processed (Lua 5.3: the RHS resolves against
+    # the outer bindings, even for closures). Declared when i reaches the
+    # statement terminator index.
+    pending_local: List[tuple] = []   # [(name, name_token_idx)]
+    pending_scope: Scope | None = None
+    pending_trigger: int | None = None
+
     def push_ctx(ctx: str):
         ctx_stack.append(ctx)
 
@@ -124,6 +233,13 @@ def build_scope_tree(tokens: List[Token]) -> Scope:
 
         if tok.type == TT.EOF:
             break
+
+        # ── Flush deferred local declarations at the statement terminator ──
+        if pending_trigger is not None and i >= pending_trigger:
+            for pname, pidx in pending_local:
+                pending_scope.declare(pname, pidx, visible_from=pending_trigger)
+            pending_local.clear()
+            pending_trigger = None
 
         # ── Skip non-structural tokens ───────────────────────────────────
         if tok.type in (TT.COMMENT, TT.LONGCOMMENT, TT.SPACE,
@@ -169,11 +285,15 @@ def build_scope_tree(tokens: List[Token]) -> Scope:
                     continue
                 else:
                     # Matched pattern: `local NAME[, NAME ...] [= ...]`
+                    # Names are collected now but DECLARED only once the main
+                    # loop reaches the statement terminator — the RHS must
+                    # resolve against outer bindings (Lua 5.3 scoping).
+                    names: List[tuple] = []
                     while j < n:
                         while j < n and tokens[j].type in (TT.SPACE, TT.NEWLINE):
                             j += 1
                         if j < n and tokens[j].type == TT.NAME:
-                            current.declare(tokens[j].value, j)
+                            names.append((tokens[j].value, j))
                             j += 1
                         # comma → more names
                         while j < n and tokens[j].type in (TT.SPACE, TT.NEWLINE):
@@ -182,6 +302,20 @@ def build_scope_tree(tokens: List[Token]) -> Scope:
                             j += 1
                         else:
                             break
+
+                    k = j
+                    while k < n and tokens[k].type in (TT.SPACE, TT.NEWLINE):
+                        k += 1
+                    has_rhs = k < n and tokens[k].type == TT.OP and tokens[k].value == "="
+
+                    if has_rhs and names:
+                        stmt_end = _find_local_stmt_end(tokens, k + 1, n)
+                        pending_local.extend(names)
+                        pending_scope = current
+                        pending_trigger = stmt_end
+                    else:
+                        for pname, pidx in names:
+                            current.declare(pname, pidx)
                     i = j
                     continue
 
@@ -303,6 +437,12 @@ def build_scope_tree(tokens: List[Token]) -> Scope:
 
         i += 1
 
+    # Flush any pending declarations left over from an unterminated final statement.
+    if pending_trigger is not None:
+        for pname, pidx in pending_local:
+            pending_scope.declare(pname, pidx, visible_from=pending_trigger)
+        pending_local.clear()
+
     root.end_idx = n
     return root
 
@@ -318,6 +458,7 @@ def collect_all_locals(scope: Scope) -> List[VarInfo]:
         List[VarInfo]: A flattened list containing all local variables defined within the tree.
     """
     result = list(scope.locals.values())
+    result.extend(scope.shadowed)
     for child in scope.children:
         result.extend(collect_all_locals(child))
     return result

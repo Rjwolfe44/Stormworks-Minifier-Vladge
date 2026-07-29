@@ -125,7 +125,9 @@ class NameAllocator:
         """
         count = 0
         # Sort variables by use count descending to ensure the most frequently used get the shortest names
-        vars_sorted = sorted(scope.locals.values(), key=lambda v: -v.use_count)
+        vars_sorted = sorted(
+            list(scope.locals.values()) + scope.shadowed, key=lambda v: -v.use_count
+        )
 
         locally_assigned: List[str] = []
         for vi in vars_sorted:

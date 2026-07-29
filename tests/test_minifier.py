@@ -1,4 +1,5 @@
 """Tests for the core minifier."""
+import re
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -464,6 +465,97 @@ class TestZipper:
         # `local b` (no value) must not be zipped into a multi-assign; result must parse
         result, _ = minify("local a = 1\nlocal b\nlocal c = 3\noutput.setNumber(1,a)", level=4)
         self._assert_valid_lua(result)
+
+    def test_rejects_dependent_locals(self):
+        # The exact HR_AI_Aim bug: RHS of a later decl references an earlier
+        # decl in the same merge group. After merging, the RHS would evaluate
+        # before the new locals bind -> the read becomes a global (nil).
+        from src.core.lexer import tokenize, tokens_to_source
+        from src.core.passes.zipper import consolidate_locals
+        src = "local gun = convertPhysics(2)\nlocal mpos = vAdd(gun.pos, gun)\nprint(gun, mpos)"
+        out, _ = consolidate_locals(tokenize(src))
+        text = tokens_to_source(out)
+        assert "gun.pos" in text  # not corrupted
+        assert text.count("local") == 2  # NOT merged
+
+    def test_rejects_dependent_binary_rhs(self):
+        # RHS ending in a binary operator must be captured whole (`1 - d`),
+        # never truncated after the operator — truncation re-parses as the
+        # broken dependent merge.
+        from src.core.lexer import tokenize, tokens_to_source
+        from src.core.passes.zipper import consolidate_locals
+        src = "local d = drag\nlocal D = 1 - d\nprint(d, D)"
+        out, _ = consolidate_locals(tokenize(src))
+        text = tokens_to_source(out)
+        assert text.count("local") == 2  # NOT merged
+
+    def test_rejects_multi_value_rhs(self):
+        # `local b = f(), g()` must never join a merge (values would drop).
+        from src.core.lexer import tokenize, tokens_to_source
+        from src.core.passes.zipper import consolidate_locals
+        src = "local a = 1\nlocal b = f(), g()\nprint(a, b)"
+        out, _ = consolidate_locals(tokenize(src))
+        text = tokens_to_source(out)
+        assert "g()" in text and text.count("local") == 2
+
+
+class TestLocalVisibility:
+    """Lua 5.3: a local's RHS (even closures) resolves against OUTER bindings."""
+
+    def _assert_valid_lua(self, code: str):
+        from luaparser import ast
+        ast.parse(code)
+
+    def test_self_reference_reads_outer_global(self):
+        # `local a = a + 1` reads the GLOBAL a; renaming must not bind RHS to
+        # the local being declared.
+        result, _ = minify("a = 9\nlocal a = a + 1\nprint(a)", level=3)
+        self._assert_valid_lua(result)
+        m = re.match(r"(\w+)=9 local (\w+)=(\w+)\+1", result)
+        assert m, f"unexpected shape: {result}"
+        g, decl, rhs = m.groups()
+        assert rhs == g, f"RHS must read the global ({g}), got {rhs}"
+        assert decl != g or rhs == decl  # decl may reuse name only if RHS matches
+
+    def test_shadowing_reads_first_local(self):
+        # `local a = 1 local a = a + 1` — second RHS reads the FIRST local.
+        result, _ = minify("local a = 1\nlocal a = a + 1\nprint(a)", level=3)
+        self._assert_valid_lua(result)
+        # first local must survive (its value feeds the second decl)
+        assert "1" in result
+        assert result.count("local") == 2
+
+    def test_closure_in_init_captures_outer(self):
+        # `local x = function() return x end` captures the OUTER x (5).
+        result, _ = minify("x = 5\nlocal x = function() return x end\nprint(x())", level=3)
+        self._assert_valid_lua(result)
+        m = re.match(r"(\w+)=5 local (\w+)=function\(\)return (\w+) end", result)
+        assert m, f"unexpected shape: {result}"
+        g, decl, body = m.groups()
+        assert body == g, f"closure must read the outer global ({g}), got {body}"
+
+    def test_multi_decl_rhs_sees_no_new_bindings(self):
+        # `local a, b = 1, a` — b's RHS `a` is the OUTER a (nil here).
+        result, _ = minify("local a, b = 1, a\nprint(a, b)", level=3)
+        self._assert_valid_lua(result)
+        # RHS `a` must NOT be renamed to either new local's name
+        m = re.search(r"local (\w+),(\w+)=1,(\w+)", result)
+        assert m, f"unexpected shape: {result}"
+        la, lb, rhs = m.groups()
+        assert rhs not in (la, lb)
+
+    def test_l4_folds_self_reference_correctly(self):
+        # Full pipeline: `a=9 local a=a+1 local b=2 print(a,b)` -> print(10,2)
+        result, _ = minify("a = 9\nlocal a = a + 1\nlocal b = 2\nprint(a, b)", level=4)
+        self._assert_valid_lua(result)
+        assert "10" in result and "2" in result
+
+    def test_l4_closure_global_inlined_into_body(self):
+        # Inliner must inline the global INTO the closure (visibility-aware),
+        # not delete the global and leave a dangling read.
+        result, _ = minify("x = 5\nlocal x = function() return x end\nprint(x())", level=4)
+        self._assert_valid_lua(result)
+        assert "return 5" in result
 
 
 

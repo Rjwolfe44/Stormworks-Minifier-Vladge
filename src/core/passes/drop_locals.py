@@ -17,7 +17,7 @@ def drop_global_locals(tokens: List[Token]) -> Tuple[List[Token], int]:
     
     # Collect all token indices that represent a global declaration
     global_decl_indices: Set[int] = set()
-    for varinfo in root_scope.locals.values():
+    for varinfo in list(root_scope.locals.values()) + root_scope.shadowed:
         global_decl_indices.add(varinfo.declaration_idx)
         
     new_tokens = []

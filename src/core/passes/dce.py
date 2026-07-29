@@ -90,6 +90,14 @@ def _collect_removable_locals(root: Scope) -> Set[int]:
             if vi.declaration_idx is None:
                 continue
             removable.add(vi.declaration_idx)
+        for vi in scope.shadowed:
+            if vi.is_param:
+                continue
+            if vi.use_count > 0:
+                continue
+            if vi.declaration_idx is None:
+                continue
+            removable.add(vi.declaration_idx)
         for child in scope.children:
             walk(child)
 

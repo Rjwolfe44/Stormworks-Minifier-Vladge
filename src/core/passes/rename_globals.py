@@ -60,10 +60,14 @@ def rename_globals(tokens: List[Token], existing_globals: set = None, obfuscate:
 
     root = build_scope_tree(tokens)
 
-    from .rename_locals import _index_scopes, _lookup_in_scopes
+    from .rename_locals import _index_scopes, _index_decls, _lookup_in_scopes
     scope_start: Dict[int, List[Scope]] = {}
     scope_end: Dict[int, List[Scope]] = {}
     _index_scopes(root, scope_start, scope_end)
+    # Declaration tokens (`local a`, params, loop vars) are locals by definition,
+    # even before their visibility window opens (initialiser not yet evaluated).
+    decl_at: Dict[int, object] = {}
+    _index_decls(root, decl_at)
 
     current_scopes = [root]
     ctx_stack: List = []
@@ -108,7 +112,7 @@ def rename_globals(tokens: List[Token], existing_globals: set = None, obfuscate:
 
             resolved_local = None
             if not is_prop and not is_key:
-                resolved_local = _lookup_in_scopes(tok.value, current_scopes, i)
+                resolved_local = decl_at.get(i) or _lookup_in_scopes(tok.value, current_scopes, i)
 
             if is_prop or is_key or not resolved_local:
                 freq_map[tok.value] += 1
@@ -176,7 +180,7 @@ def rename_globals(tokens: List[Token], existing_globals: set = None, obfuscate:
 
             resolved_local = None
             if not is_prop and not is_key:
-                resolved_local = _lookup_in_scopes(tok.value, current_scopes, i)
+                resolved_local = decl_at.get(i) or _lookup_in_scopes(tok.value, current_scopes, i)
 
             if is_prop or is_key or not resolved_local:
                 new_tokens[i] = Token(TT.NAME, name_map[tok.value], tok.pos, is_global=True)

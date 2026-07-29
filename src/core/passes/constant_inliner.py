@@ -74,12 +74,35 @@ def inline_constants(tokens: List[Token]) -> Tuple[List[Token], int]:
             _index_scopes(child, st, en)
 
     _index_scopes(root, scope_start, scope_end)
-    
+
+    # Declaration-name tokens (`local a`, params, loop vars) resolve to the
+    # VarInfo they declare even before the visibility window opens.
+    from .rename_locals import _index_decls
+    decl_at: Dict[int, object] = {}
+    _index_decls(root, decl_at)
+
     def _lookup_in_scopes(name: str, scopes: List[Scope], current_idx: int):
+        """Resolve a read at current_idx, honouring Lua visibility windows:
+        a local with an initialiser is NOT visible inside its own RHS
+        (visible_from_idx), and a shadowed binding stops being visible at
+        visible_until_idx."""
         for s in reversed(scopes):
             vi = s.lookup(name)
             if vi and vi.scope == s and vi.declaration_idx <= current_idx:
-                return vi
+                if vi.visible_from_idx >= 0 and current_idx < vi.visible_from_idx:
+                    pass  # not yet visible — fall through to shadowed/outer
+                elif vi.visible_until_idx >= 0 and current_idx >= vi.visible_until_idx:
+                    pass  # shadowed — fall through
+                else:
+                    return vi
+            for svi in reversed(s.shadowed):
+                if svi.original_name != name or svi.declaration_idx > current_idx:
+                    continue
+                if svi.visible_from_idx >= 0 and current_idx < svi.visible_from_idx:
+                    continue
+                if svi.visible_until_idx >= 0 and current_idx >= svi.visible_until_idx:
+                    continue
+                return svi
         return None
 
     current_scopes = [root]
@@ -220,7 +243,7 @@ def inline_constants(tokens: List[Token]) -> Tuple[List[Token], int]:
                             is_prop = True
                             
                         if not is_prop:
-                            lhs_vars.append(tokens[j])
+                            lhs_vars.append((tokens[j], j))
                             
                         j = prev_j # skip the name and dot if any
                         # We must continue backwards if there is a comma
@@ -240,8 +263,8 @@ def inline_constants(tokens: List[Token]) -> Tuple[List[Token], int]:
                 
                 is_multiple = len(lhs_vars) > 1
                 
-                for var_tok in lhs_vars:
-                    resolved_local = _lookup_in_scopes(var_tok.value, current_scopes, i)
+                for var_tok, var_idx in lhs_vars:
+                    resolved_local = decl_at.get(var_idx) or _lookup_in_scopes(var_tok.value, current_scopes, i)
                     if resolved_local:
                         v_id = id(resolved_local)
                         local_assign_count[v_id] += 1
@@ -352,8 +375,8 @@ def inline_constants(tokens: List[Token]) -> Tuple[List[Token], int]:
                     is_key = True
 
             if not is_prop and not is_key:
-                resolved_local = _lookup_in_scopes(tok.value, current_scopes, i)
-                
+                resolved_local = decl_at.get(i) or _lookup_in_scopes(tok.value, current_scopes, i)
+
                 # Are we at the assignment itself?
                 # We do not inline the LHS of the assignment!
                 j = i + 1

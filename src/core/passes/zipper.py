@@ -24,13 +24,44 @@ def _skip_ws(tokens: List[Token], i: int, n: int) -> int:
     return i
 
 
+# Expression-boundary sets (mirrors scope.py): a token that can END an
+# expression, and a token that can CONTINUE one. A binary operator can never
+# end an expression — `1 - d` must not be truncated after the `-`.
+_EXPR_END_TYPES = (TT.NAME, TT.NUMBER, TT.STRING, TT.LONGSTRING)
+_EXPR_END_OPS = frozenset({")", "]", "}", "..."})
+_EXPR_END_KWS = frozenset({"true", "false", "nil"})
+_EXPR_CONT_OPS = frozenset({
+    "+", "-", "*", "/", "//", "%", "^", "#", "..",
+    "==", "~=", "<", ">", "<=", ">=", "(", "[", "{", ".", ":",
+})
+_EXPR_CONT_KWS = frozenset({"and", "or"})
+
+
+def _ends_expr(t: Token) -> bool:
+    return (
+        t.type in _EXPR_END_TYPES
+        or (t.type == TT.OP and t.value in _EXPR_END_OPS)
+        or (t.type == TT.KEYWORD and t.value in _EXPR_END_KWS)
+    )
+
+
+def _continues_expr(t: Token) -> bool:
+    if t.type == TT.OP and t.value in _EXPR_CONT_OPS:
+        return True
+    if t.type == TT.KEYWORD and t.value in _EXPR_CONT_KWS:
+        return True
+    if t.type in (TT.STRING, TT.LONGSTRING):
+        return True  # call with string arg: f "x"
+    return False
+
+
 def _parse_local_decl(tokens: List[Token], i: int, n: int) -> Optional[dict]:
     """
     Parse `local <name> = <single-expr>` starting at index i.
     Returns {'name': Token, 'value': [tokens], 'next_i': int} or None.
     The RHS is captured as everything up to (but not including) the next
-    statement boundary at paren/bracket depth 0. Multi-name `local a,b=`
-    and `local function` are rejected.
+    statement boundary at paren/bracket depth 0. Multi-name `local a,b=`,
+    `local function`, and multi-value RHS (`local a = f(), g()`) are rejected.
     """
     j = _skip_ws(tokens, i, n)
     if j >= n or tokens[j].type != TT.KEYWORD or tokens[j].value != "local":
@@ -51,9 +82,8 @@ def _parse_local_decl(tokens: List[Token], i: int, n: int) -> Optional[dict]:
     # capture a single expression: stop at depth-0 ',' or a statement boundary
     depth = 0
     k = j
-    end = j
     value: List[Token] = []
-    saw_any = False
+    prev: Optional[Token] = None
     while k < n:
         t = tokens[k]
         if t.type in _WS:
@@ -62,37 +92,57 @@ def _parse_local_decl(tokens: List[Token], i: int, n: int) -> Optional[dict]:
         if t.type == TT.OP:
             if t.value in ("(", "[", "{"):
                 depth += 1
-            elif t.value in (")", "]", "}"):
+                value.append(t)
+                prev = t
+                k += 1
+                continue
+            if t.value in (")", "]", "}"):
                 depth -= 1
-            elif t.value == "," and depth == 0:
-                break  # multi-value RHS — not a single expr
-            elif t.value == ";" and depth == 0:
+                value.append(t)
+                prev = t
+                k += 1
+                continue
+            if t.value == "," and depth == 0:
+                return None  # multi-value RHS — merging would drop values
+            if t.value == ";" and depth == 0:
                 break
         if t.type == TT.KEYWORD and depth == 0 and t.value in _STMT_END_KW:
             break
+        if depth == 0 and prev is not None and _ends_expr(prev) and not _continues_expr(t):
+            break  # statement boundary
         value.append(t)
-        saw_any = True
+        prev = t
         k += 1
-        end = k
-        # stop after a complete balanced expr that isn't obviously continuing
-        if depth == 0 and saw_any:
-            # peek: if next meaningful token can't extend an expr, stop
-            nxt = _skip_ws(tokens, k, n)
-            if nxt < n:
-                nv = tokens[nxt]
-                if nv.type == TT.KEYWORD and nv.value in _STMT_END_KW:
-                    break
-                # binary/unary operators and call/index continuations keep going
-                if not (nv.type == TT.OP and nv.value in (
-                        "+", "-", "*", "/", "//", "%", "^", "#", "..",
-                        "==", "~=", "<", ">", "<=", ">=", "(", "[", "{", ".", ":")):
-                    if not (nv.type == TT.KEYWORD and nv.value in ("and", "or", "not")):
-                        break
-            else:
-                break
-    if not saw_any or not value:
+    if not value:
         return None
-    return {'local': local_tok, 'name': name_tok, 'value': value, 'next_i': end}
+    return {'local': local_tok, 'name': name_tok, 'value': value, 'next_i': k}
+
+
+def _rhs_references(value: List[Token], names: set) -> bool:
+    """
+    True if the RHS token list references any variable in `names`.
+
+    In `local a, b = e1, e2` the RHS evaluates BEFORE the new locals bind, so a
+    reference in e2 to `a` would resolve to the outer scope, not the local being
+    declared. Merging is only safe when no RHS references a same-group name.
+
+    Property (`.x` / `:m()`) and table-key (`{k = ...}`) positions are not
+    variable references and are ignored. A name referencing ITSELF in its own
+    RHS is safe (it resolves to the outer binding in both forms), so callers
+    must only pass names of EARLIER group members.
+    """
+    meaningful = [t for t in value if t.type not in _WS]
+    for k, t in enumerate(meaningful):
+        if t.type != TT.NAME or t.value not in names:
+            continue
+        prev = meaningful[k - 1] if k > 0 else None
+        nxt = meaningful[k + 1] if k + 1 < len(meaningful) else None
+        if prev is not None and prev.type == TT.OP and prev.value in (".", ":"):
+            continue  # property / method name, not a variable read
+        if nxt is not None and nxt.type == TT.OP and nxt.value == "=":
+            continue  # table constructor key `{ name = ... }`
+        return True
+    return False
 
 
 def consolidate_locals(tokens: List[Token]) -> Tuple[List[Token], int]:
@@ -111,8 +161,9 @@ def consolidate_locals(tokens: List[Token]) -> Tuple[List[Token], int]:
 
         decls = [parsed]
         next_i = parsed['next_i']
-        while next_i < n:
-            j = next_i
+        scan = next_i
+        while scan < n:
+            j = scan
             while j < n and (tokens[j].type in _WS or (tokens[j].type == TT.OP and tokens[j].value == ";")):
                 j += 1
             if j >= n:
@@ -120,8 +171,15 @@ def consolidate_locals(tokens: List[Token]) -> Tuple[List[Token], int]:
             nxt = _parse_local_decl(tokens, j, n)
             if not nxt:
                 break
+            # RHS of a candidate must not reference locals already in this merge
+            # group — after merging, the whole RHS evaluates before any of the
+            # group's new locals bind, so such a reference would read a global.
+            group_names = {d['name'].value for d in decls}
+            if _rhs_references(nxt['value'], group_names):
+                break
             decls.append(nxt)
             next_i = nxt['next_i']
+            scan = next_i
 
         if len(decls) < 2:
             new_tokens.append(tokens[i])
