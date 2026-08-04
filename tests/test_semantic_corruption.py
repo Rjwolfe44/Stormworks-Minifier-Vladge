@@ -230,3 +230,33 @@ class TestSemanticValidator:
     def test_known_api_ok(self):
         ok = "function onDraw() local x,y=map.mapToScreen(0,0,1,32,32,0,0) end"
         assert validate_minified(ok) == []
+
+    def test_self_metamethod_not_flagged(self):
+        ok = (
+            "local T={}\n"
+            "function T:new()\n"
+            "  local o={}\n"
+            "  setmetatable(o,self)\n"
+            "  self.__index=self\n"
+            "  return o\n"
+            "end\n"
+            "function onTick() local a=T:new() end\n"
+        )
+        result, stats = minify(ok, level=3)
+        assert "__index" in result
+        assert stats.semantic_ok, stats.semantic_errors
+        assert validate_minified(result) == []
+
+    def test_local_decl_not_treated_as_defined_global(self):
+        """A `local Name` must not suppress later undefined-global detection for Name."""
+        from src.core.linter import lint_script
+        # `Vec` is local but never used; a different undefined `Other` must still flag.
+        # More important: after minify of a broken use of a never-declared global:
+        broken = "function onTick() output.setNumber(1, missingGlobal) end"
+        errs = lint_script(broken)
+        assert any("missingGlobal" in e for e in errs)
+        # And a local decl must not register as a user global that hides reads:
+        src = "local onlyLocal = 1\nfunction onTick() output.setNumber(1, onlyLocal + ghost) end"
+        errs2 = lint_script(src)
+        assert any("ghost" in e for e in errs2)
+        assert not any("onlyLocal" in e for e in errs2)

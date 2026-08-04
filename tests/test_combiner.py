@@ -60,6 +60,42 @@ def test_vscode_library_paths(tmp_path: Path):
     assert "ok=true" in out
 
 
+def test_extra_paths_resolution(tmp_path: Path):
+    external = tmp_path / "ext"
+    mod = external / "Pack"
+    mod.mkdir(parents=True)
+    (mod / "Item.lua").write_text("return 42", encoding="utf-8")
+    # root has no Pack/ — only extra_paths should resolve it
+    out = bundle_requires(
+        'local x = require("Pack.Item")',
+        tmp_path,
+        extra_paths=[external],
+    )
+    assert "require" not in out
+    assert "return 42" in out
+
+
+def test_nested_require_keeps_search_dirs(tmp_path: Path):
+    """A required file's require() must still see project/_build/libs."""
+    lib = tmp_path / "_build" / "libs" / "LifeBoatAPI"
+    lib.mkdir(parents=True)
+    (lib / "Core.lua").write_text("return {n=1}", encoding="utf-8")
+    # Mid file lives under a subfolder; its require must not lose _build/libs
+    mid = tmp_path / "src" / "app"
+    mid.mkdir(parents=True)
+    (mid / "boot.lua").write_text(
+        'local C = require("LifeBoatAPI.Core")\nreturn C\n',
+        encoding="utf-8",
+    )
+    main = 'local b = require("src.app.boot")\nfunction onTick() end\n'
+    out = bundle_requires(main, tmp_path)
+    assert "require" not in out
+    assert "n=1" in out
+    result, stats = minify(main, level=3, root_dir=str(tmp_path))
+    assert "require" not in result
+    assert stats.semantic_ok, stats.semantic_errors
+
+
 def test_unresolved_require_flagged():
     src = 'local x = require("Missing.Module")\nfunction onTick() end'
     errs = validate_minified(src, addon=False)
