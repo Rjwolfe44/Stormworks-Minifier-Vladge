@@ -147,9 +147,25 @@ def optimize_tokens(tokens: List[Token], *, lua53_floor: bool = False) -> Tuple[
 
         # ── 3. Table Constructor Packing ──
         # {["key"] = val} -> {key=val}
+        # ONLY inside table constructors. Applying this to index writes
+        # `t["key"]=val` yields `t key=val` → `tkey=val` / `t;key=val` and
+        # desyncs from `t.key` reads (nil at runtime).
         if tok.type == TT.OP and tok.value == "[":
+            # Table-field context: previous meaningful token is `{` or `,`
+            prev_i = i - 1
+            while prev_i >= 0 and tokens[prev_i].type in (TT.SPACE, TT.NEWLINE, TT.COMMENT, TT.LONGCOMMENT):
+                prev_i -= 1
+            in_table_field = (
+                prev_i >= 0
+                and tokens[prev_i].type == TT.OP
+                and tokens[prev_i].value in ("{", ",")
+            )
             j = skip_spaces(i + 1)
-            if j < n and tokens[j].type == TT.STRING:
+            if (
+                in_table_field
+                and j < n
+                and tokens[j].type == TT.STRING
+            ):
                 str_val = tokens[j].value
                 # Verify that the key is a valid Lua identifier
                 import re

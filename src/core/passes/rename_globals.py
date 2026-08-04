@@ -48,6 +48,40 @@ def _is_protected_prop_or_key(tokens: List[Token], tok: Token, is_prop: bool, is
     return False
 
 
+def _string_literal_ident(tok: Token) -> Optional[str]:
+    """If tok is a short string holding a Lua identifier, return that identifier."""
+    if tok.type != TT.STRING:
+        return None
+    val = tok.value
+    if len(val) < 3 or val[0] not in ("'", '"') or val[-1] != val[0]:
+        return None
+    inner = val[1:-1]
+    if not inner or not (inner[0].isalpha() or inner[0] == "_"):
+        return None
+    if not all(c.isalnum() or c == "_" for c in inner):
+        return None
+    # Reject escapes / non-raw contents
+    if "\\" in inner:
+        return None
+    return inner
+
+
+def _is_bracket_string_key(tokens: List[Token], i: int) -> bool:
+    """True when tokens[i] is the string in `t["key"]` / `t['key']` index form."""
+    n = len(tokens)
+    prev_i = i - 1
+    while prev_i >= 0 and tokens[prev_i].type in (TT.SPACE, TT.NEWLINE, TT.COMMENT, TT.LONGCOMMENT):
+        prev_i -= 1
+    if prev_i < 0 or tokens[prev_i].type != TT.OP or tokens[prev_i].value != "[":
+        return False
+    next_i = i + 1
+    while next_i < n and tokens[next_i].type in (TT.SPACE, TT.NEWLINE, TT.COMMENT, TT.LONGCOMMENT):
+        next_i += 1
+    if next_i >= n or tokens[next_i].type != TT.OP or tokens[next_i].value != "]":
+        return False
+    return True
+
+
 def rename_globals(
     tokens: List[Token],
     existing_globals: set = None,
@@ -85,6 +119,7 @@ def rename_globals(
 
     freq_map: Counter = Counter()
     standalone_globals: Set[str] = set()
+    prop_or_key_names: Set[str] = set()
     n = len(tokens)
 
     for i, tok in enumerate(tokens):
@@ -131,6 +166,8 @@ def rename_globals(
 
             if is_prop or is_key or not resolved_local:
                 freq_map[tok.value] += 1
+                if is_prop or is_key:
+                    prop_or_key_names.add(tok.value)
                 if not is_prop and not is_key:
                     standalone_globals.add(tok.value)
 
@@ -203,6 +240,24 @@ def rename_globals(
 
             if is_prop or is_key or not resolved_local:
                 new_tokens[i] = Token(TT.NAME, name_map[tok.value], tok.pos, is_global=True)
+
+        # Keep `t["foo"]` in sync with `t.foo` renames — otherwise writes via
+        # brackets and reads via dots (or vice versa) nil at runtime.
+        elif (
+            rename_props
+            and tok.type == TT.STRING
+            and _is_bracket_string_key(new_tokens, i)
+        ):
+            ident = _string_literal_ident(tok)
+            if (
+                ident
+                and ident in name_map
+                and ident in prop_or_key_names
+                and ident not in SW_API_PROPERTIES
+                and ident not in LUA_METAMETHODS
+            ):
+                q = tok.value[0]
+                new_tokens[i] = Token(TT.STRING, f"{q}{name_map[ident]}{q}", tok.pos)
 
         _pop_scopes_at(i, scope_end, current_scopes, ctx_stack)
 
