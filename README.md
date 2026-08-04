@@ -4,6 +4,8 @@ A Stormworks Lua minifier that actually fits the **8192** character limit — an
 
 **Current release: [v2.6.1](https://github.com/Rjwolfe44/Stormworks-Minifier-Vladge/releases/tag/v2.6.1)**
 
+> **Dev tip:** LifeBoat / VS Code projects — minify the **`.lua` file** (so `require()` can resolve via `_build/libs` and `.vscode` library paths). Paste-only minify cannot find modules; leftover `require(...)` is now reported as `[BROKEN]` in microcontroller mode.
+
 <p align="center">
   <a href="https://github.com/Rjwolfe44/Stormworks-Minifier-Vladge/releases/latest"><img alt="Download latest" src="https://img.shields.io/github/v/release/Rjwolfe44/Stormworks-Minifier-Vladge?style=for-the-badge&label=Download&color=2ea44f"></a>
   &nbsp;

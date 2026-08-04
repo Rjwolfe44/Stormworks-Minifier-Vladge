@@ -90,7 +90,7 @@ def _write_utf8_no_bom(path: Path, text: str) -> None:
 
 def _batch_worker(args):
     """Worker function for multicore batch processing."""
-    path, level, obfuscate, multiline, inline_functions, lua53_floor, addon = args
+    path, level, obfuscate, multiline, inline_functions, lua53_floor, addon, library_paths = args
     try:
         result, stats = minify_file(
             str(path), level, obfuscate,
@@ -98,13 +98,14 @@ def _batch_worker(args):
             inline_functions=inline_functions,
             lua53_floor=lua53_floor,
             addon=addon,
+            library_paths=library_paths,
         )
         return path, result, stats, None
     except Exception as e:
         return path, None, None, str(e)
 
 
-def process_single(input_path: Path, level: int, clipboard: bool, no_save: bool, save: str | None, deploy: str | None, quiet: bool, obfuscate: bool, multiline: str = "off", inline_functions: bool = False, lua53_floor: bool = False, addon: bool = False):
+def process_single(input_path: Path, level: int, clipboard: bool, no_save: bool, save: str | None, deploy: str | None, quiet: bool, obfuscate: bool, multiline: str = "off", inline_functions: bool = False, lua53_floor: bool = False, addon: bool = False, library_paths: list | None = None):
     """Process a single file."""
     result, stats = minify_file(
         str(input_path), level, obfuscate,
@@ -112,6 +113,7 @@ def process_single(input_path: Path, level: int, clipboard: bool, no_save: bool,
         inline_functions=inline_functions,
         lua53_floor=lua53_floor,
         addon=addon,
+        library_paths=library_paths,
     )
 
     if not quiet:
@@ -157,7 +159,7 @@ def process_single(input_path: Path, level: int, clipboard: bool, no_save: bool,
     return stats
 
 
-def process_batch(folder: Path, level: int, workers: int, deploy: str | None, quiet: bool, obfuscate: bool, multiline: str = "off", inline_functions: bool = False, lua53_floor: bool = False, addon: bool = False):
+def process_batch(folder: Path, level: int, workers: int, deploy: str | None, quiet: bool, obfuscate: bool, multiline: str = "off", inline_functions: bool = False, lua53_floor: bool = False, addon: bool = False, library_paths: list | None = None):
     """Batch-process all .lua files in a folder (multicore)."""
     lua_files = list(folder.rglob("*.lua"))
     # Exclude _minified output dirs and _build dirs
@@ -184,7 +186,10 @@ def process_batch(folder: Path, level: int, workers: int, deploy: str | None, qu
     errors = 0
     t0 = time.perf_counter()
 
-    args = [(f, level, obfuscate, multiline, inline_functions, lua53_floor, addon) for f in lua_files]
+    args = [
+        (f, level, obfuscate, multiline, inline_functions, lua53_floor, addon, library_paths)
+        for f in lua_files
+    ]
     with ProcessPoolExecutor(max_workers=workers) as executor:
         futures = {executor.submit(_batch_worker, a): a for a in args}
         done = 0
@@ -278,6 +283,9 @@ def main():
     parser.add_argument("--addon", action="store_true",
                         help="Mission addon mode: 131071 limit, protect g_savedata, "
                              "keep property.slider/checkbox on own lines, UTF-8 no BOM")
+    parser.add_argument("--library-path", action="append", default=[], metavar="DIR",
+                        help="Extra require() search directory (repeatable). "
+                             "Also auto-reads _build/libs and LifeBoat VS Code libraryPaths")
     parser.add_argument("--quiet", action="store_true",
                         help="Suppress output")
 
@@ -285,6 +293,7 @@ def main():
 
     input_path = Path(args.input)
     workers = args.workers or os.cpu_count() or 4
+    library_paths = args.library_path or None
     # Addon scripts: default to safer L2 unless user explicitly picks a level via argv.
     level = args.level
     if args.addon and "--level" not in sys.argv:
@@ -295,7 +304,8 @@ def main():
             print(f"{RED}Error: {input_path} is not a directory{RESET}")
             sys.exit(1)
         process_batch(input_path, level, workers, args.deploy, args.quiet, args.obfuscate,
-                      args.multiline, args.inline_functions, args.lua53_floor, args.addon)
+                      args.multiline, args.inline_functions, args.lua53_floor, args.addon,
+                      library_paths)
     else:
         if not input_path.exists():
             print(f"{RED}Error: file not found: {input_path}{RESET}")
@@ -303,7 +313,8 @@ def main():
         if not input_path.suffix.lower() == ".lua":
             print(f"{YELLOW}Warning: {input_path} is not a .lua file{RESET}")
         process_single(input_path, level, args.clipboard, args.no_save, args.save, args.deploy, args.quiet,
-                       args.obfuscate, args.multiline, args.inline_functions, args.lua53_floor, args.addon)
+                       args.obfuscate, args.multiline, args.inline_functions, args.lua53_floor, args.addon,
+                       library_paths)
 
 
 if __name__ == "__main__":

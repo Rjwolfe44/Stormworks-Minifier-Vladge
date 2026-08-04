@@ -145,11 +145,13 @@ def minify(
     inline_functions: bool = False,
     lua53_floor: bool = False,
     addon: bool = False,
+    library_paths: List[str] | None = None,
 ) -> tuple[str, MinifyStats]:
     """Minify Lua source at the given optimisation level.
 
     addon=True: mission/addon script mode (131071 char limit, property.* line breaks,
     skip property-string packing that targets microcontroller PINs).
+    library_paths: extra directories for require() resolution (LifeBoat libs).
     """
     t0 = time.perf_counter()
     # Addon mission UI + debugging: prefer statement breaks when caller left default off.
@@ -170,22 +172,13 @@ def minify(
     from .passes.sw_runtime import unwrap_pcall
     source, _pcall_unwrapped = unwrap_pcall(source)
 
-    l3_fallback: tuple[str, MinifyStats] | None = None
-    if level == 4:
-        l3_fallback = minify(
-            source,
-            level=3,
-            root_dir=root_dir,
-            obfuscate=obfuscate,
-            drop_locals=drop_locals,
-            multiline=multiline,
-            inline_functions=False,
-            lua53_floor=lua53_floor,
-            addon=addon,
-        )
+    # L4 still compares against a full Aggressive run for the monotonicity
+    # guarantee (Ultimate must never ship larger than Aggressive). Compute L3
+    # after L4 so the hot path builds Ultimate first; both still run today.
+    unwrapped_source = source
 
     from .passes.combiner import bundle_requires
-    source = bundle_requires(source, root_dir)
+    source = bundle_requires(source, root_dir, extra_paths=library_paths)
 
     from .passes.section_stripper import strip_dead_sections
     source, stats.sections_stripped = strip_dead_sections(source)
@@ -340,18 +333,24 @@ def minify(
             stats.whitespace_saved += extra_ws
             current_source = candidate
 
-    if level == 4 and l3_fallback is not None:
-        l3_out, l3_stats = l3_fallback
+    if level == 4:
+        # Monotonicity: if Ultimate grew vs Aggressive, keep Aggressive.
+        l3_out, l3_stats = minify(
+            unwrapped_source,
+            level=3,
+            root_dir=root_dir,
+            obfuscate=obfuscate,
+            drop_locals=drop_locals,
+            multiline=multiline,
+            inline_functions=False,
+            lua53_floor=lua53_floor,
+            addon=addon,
+            library_paths=library_paths,
+        )
         if len(current_source) > len(l3_out):
             current_source = l3_out
-            stats.final_size = l3_stats.final_size
-            stats.char_limit = l3_stats.char_limit
-            stats.mode = l3_stats.mode
-            stats.semantic_errors = l3_stats.semantic_errors
+            stats = l3_stats
             stats.elapsed_ms = (time.perf_counter() - t0) * 1000
-            if addon:
-                current_source = finalize_addon_source(current_source)
-                stats.final_size = len(current_source)
             return current_source, stats
 
     if addon:
@@ -375,6 +374,7 @@ def minify_file(
     inline_functions: bool = False,
     lua53_floor: bool = False,
     addon: bool = False,
+    library_paths: List[str] | None = None,
 ) -> tuple[str, MinifyStats]:
     import os
     with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -390,4 +390,5 @@ def minify_file(
         inline_functions=inline_functions,
         lua53_floor=lua53_floor,
         addon=addon,
+        library_paths=library_paths,
     )
