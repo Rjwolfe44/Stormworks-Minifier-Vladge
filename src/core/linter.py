@@ -49,7 +49,7 @@ def lint_script(source_code: str) -> List[str]:
         return [f"Scope Error (Check your brackets/ends): {e}"]
         
     # Step 3: Map individual tokens to their respective lexical scopes to accurately resolve variable references
-    from .passes.rename_locals import _index_scopes, _lookup_in_scopes
+    from .passes.rename_locals import _index_scopes, _lookup_in_scopes, _index_decls
     scope_start = {}
     scope_end = {}
     _index_scopes(root_scope, scope_start, scope_end)
@@ -149,8 +149,33 @@ def lint_script(source_code: str) -> List[str]:
             if prev_i >= 0 and tokens[prev_i].type == TT.KEYWORD and tokens[prev_i].value == "function":
                 # Confirm this is a global function and not a local function (which would resolve in `_lookup_in_scopes`)
                 is_assignment = True
+
+            # Never treat names in a `local` declaration list as global defines.
+            # `local Vec = ...` must not register `Vec` as a user global (that
+            # suppressed real undefined-global warnings when scope placement failed).
+            is_local_decl = False
+            if prev_i >= 0:
+                if tokens[prev_i].type == TT.KEYWORD and tokens[prev_i].value == "local":
+                    is_local_decl = True
+                elif tokens[prev_i].type == TT.OP and tokens[prev_i].value == ",":
+                    # Walk back through `a, b, c` to see if this is `local a, b, c`
+                    k = prev_i
+                    while k >= 0:
+                        while k >= 0 and tokens[k].type in (TT.SPACE, TT.NEWLINE, TT.COMMENT, TT.LONGCOMMENT):
+                            k -= 1
+                        if k < 0:
+                            break
+                        if tokens[k].type == TT.KEYWORD and tokens[k].value == "local":
+                            is_local_decl = True
+                            break
+                        if tokens[k].type == TT.NAME or (
+                            tokens[k].type == TT.OP and tokens[k].value == ","
+                        ):
+                            k -= 1
+                            continue
+                        break
                 
-            if is_assignment:
+            if is_assignment and not is_local_decl:
                 resolved_local = _lookup_in_scopes(tok.value, current_scopes, i)
                 if not resolved_local:
                     user_defined_globals.add(tok.value)
@@ -229,6 +254,13 @@ def lint_script(source_code: str) -> List[str]:
     def _in_uncalled_function(idx: int) -> bool:
         return any(start <= idx <= end for start, end in uncalled_spans)
 
+    # Declaration tokens (`local a`, params, for-vars) are not reads — skip them
+    # in Pass 2. Before the local-decl hygiene fix, Pass 1 incorrectly registered
+    # these as user globals which suppressed false "undefined" hits on the decl
+    # itself (visible_from is after the RHS, so lookup fails at the name token).
+    decl_at: dict = {}
+    _index_decls(root_scope, decl_at)
+
     # Reset environment tracking for the validation pass
     current_scopes = [root_scope]
     ctx_stack = []
@@ -249,6 +281,10 @@ def lint_script(source_code: str) -> List[str]:
                 ctx_stack.pop()
                 
         if tok.type == TT.NAME:
+            if i in decl_at:
+                _pop_scopes(i)
+                continue
+
             # Ignore property access using `.` or `:`
             prev_i = i - 1
             while prev_i >= 0 and tokens[prev_i].type in (TT.SPACE, TT.NEWLINE, TT.COMMENT, TT.LONGCOMMENT):

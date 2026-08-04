@@ -361,7 +361,7 @@ def minify(
     stats.elapsed_ms = (time.perf_counter() - t0) * 1000
 
     from .validate import validate_minified
-    stats.semantic_errors = validate_minified(current_source)
+    stats.semantic_errors = validate_minified(current_source, addon=addon)
 
     return current_source, stats
 

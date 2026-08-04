@@ -6,7 +6,7 @@ Stormworks/Lua API properties (map.mapToScreen, math.pi, etc.) are never renamed
 
 from typing import List, Dict, Set, Tuple, Optional
 from collections import Counter
-from ..lexer import Token, TT, SW_GLOBALS, SW_API_PROPERTIES, LUA_KEYWORDS
+from ..lexer import Token, TT, SW_GLOBALS, SW_API_PROPERTIES, LUA_KEYWORDS, LUA_METAMETHODS
 from ..scope import Scope, build_scope_tree
 
 
@@ -32,6 +32,8 @@ def _pop_scopes_at(i: int, scope_end: Dict[int, List[Scope]], current_scopes: Li
 
 def _is_protected_prop_or_key(tokens: List[Token], tok: Token, is_prop: bool, is_key: bool, prev_i: int) -> bool:
     """True if this name must not be renamed (SW/Lua API surface)."""
+    if tok.value in LUA_METAMETHODS:
+        return True
     if is_prop:
         recv = _receiver_name(tokens, prev_i)
         # Default-deny: never rename anything after a known SW/Lua global table

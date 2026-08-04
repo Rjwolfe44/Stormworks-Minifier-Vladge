@@ -173,6 +173,16 @@ SW_API_PROPERTIES = frozenset({
     "wrap", "write", "x", "y", "yield", "z",
 })
 
+# Lua metamethod / metatable field names — valid on any table including `self`.
+# Must not be flagged as renamed SW API properties (`self.__index = self`).
+LUA_METAMETHODS = frozenset({
+    "__add", "__band", "__bnot", "__bor", "__bxor", "__call",
+    "__close", "__concat", "__div", "__eq", "__gc", "__idiv",
+    "__index", "__le", "__len", "__lt", "__metatable", "__mod",
+    "__mode", "__mul", "__name", "__newindex", "__pairs", "__pow",
+    "__shl", "__shr", "__sub", "__tostring", "__unm",
+})
+
 
 
 

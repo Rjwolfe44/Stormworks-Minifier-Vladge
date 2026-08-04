@@ -145,6 +145,11 @@ def _find_local_stmt_end(tokens: List[Token], start: int, n: int) -> int:
     terminator is detected structurally: at depth 0, when the previous
     meaningful token completes an expression and the current token cannot
     continue one, the statement ended before the current token.
+
+    Paren/bracket/brace depth is tracked so IIFEs like
+    ``(function() ... end)()`` are treated as a single RHS — without this,
+    ``end)`` would look like an expression end at the grouping ``)`` and
+    truncate before the call ``()``.
     """
     def _ends_expr(t: Token) -> bool:
         return (
@@ -163,6 +168,7 @@ def _find_local_stmt_end(tokens: List[Token], start: int, n: int) -> int:
         return False
 
     depth = 0  # block depth (function/if/for/while/do/repeat) inside the RHS
+    paren = 0  # (), [], {} nesting — keeps IIFE call tails attached to the RHS
     prev: Token | None = None
     i = start
     while i < n:
@@ -172,23 +178,44 @@ def _find_local_stmt_end(tokens: List[Token], start: int, n: int) -> int:
         if t.type in (TT.SPACE, TT.NEWLINE, TT.COMMENT, TT.LONGCOMMENT):
             i += 1
             continue
-        if depth == 0 and prev is not None and _ends_expr(prev) and not _continues_expr(t):
+        if (
+            depth == 0
+            and paren == 0
+            and prev is not None
+            and _ends_expr(prev)
+            and not _continues_expr(t)
+        ):
             return i  # new statement starts here
         if t.type == TT.KEYWORD:
             v = t.value
             if v in ("function", "if", "for", "while", "do", "repeat"):
                 depth += 1
             elif v in ("end", "until"):
-                if depth == 0:
+                if depth == 0 and paren == 0:
                     return i
-                depth -= 1
-            elif depth == 0 and v in _STMT_END_KWS:
+                if depth > 0:
+                    depth -= 1
+            elif depth == 0 and paren == 0 and v in _STMT_END_KWS:
                 return i
-        elif t.type == TT.OP and t.value == ";" and depth == 0:
-            return i
+        elif t.type == TT.OP:
+            if t.value in ("(", "[", "{"):
+                paren += 1
+            elif t.value in (")", "]", "}"):
+                if paren > 0:
+                    paren -= 1
+            elif t.value == ";" and depth == 0 and paren == 0:
+                return i
         prev = t
         i += 1
     return n
+
+
+@dataclass
+class _PendingLocalFrame:
+    """One deferred `local names = <rhs>` waiting for its statement terminator."""
+    names: List[tuple]  # [(name, name_token_idx), ...]
+    scope: Scope
+    trigger: int
 
 
 def build_scope_tree(tokens: List[Token]) -> Scope:
@@ -217,9 +244,12 @@ def build_scope_tree(tokens: List[Token]) -> Scope:
     # only AFTER the whole RHS is processed (Lua 5.3: the RHS resolves against
     # the outer bindings, even for closures). Declared when i reaches the
     # statement terminator index.
-    pending_local: List[tuple] = []   # [(name, name_token_idx)]
-    pending_scope: Scope | None = None
-    pending_trigger: int | None = None
+    #
+    # MUST be a stack: a nested `local` inside an RHS (LifeBoat/combiner IIFE
+    # pattern) must not clobber the outer pending frame — that bug put the
+    # outer name inside the IIFE scope so later uses became undefined globals
+    # (nil at runtime after rename_globals).
+    pending_stack: List[_PendingLocalFrame] = []
 
     def push_ctx(ctx: str):
         ctx_stack.append(ctx)
@@ -228,6 +258,13 @@ def build_scope_tree(tokens: List[Token]) -> Scope:
         if ctx_stack:
             # The 'expected' parameter is intentionally not strictly enforced to gracefully tolerate malformed or incomplete Lua code
             ctx_stack.pop()
+
+    def _flush_pending(at: int) -> None:
+        while pending_stack and at >= pending_stack[-1].trigger:
+            frame = pending_stack.pop()
+            for pname, pidx in frame.names:
+                frame.scope.declare(pname, pidx, visible_from=frame.trigger)
+
     while i < n:
         tok = tokens[i]
 
@@ -235,11 +272,7 @@ def build_scope_tree(tokens: List[Token]) -> Scope:
             break
 
         # ── Flush deferred local declarations at the statement terminator ──
-        if pending_trigger is not None and i >= pending_trigger:
-            for pname, pidx in pending_local:
-                pending_scope.declare(pname, pidx, visible_from=pending_trigger)
-            pending_local.clear()
-            pending_trigger = None
+        _flush_pending(i)
 
         # ── Skip non-structural tokens ───────────────────────────────────
         if tok.type in (TT.COMMENT, TT.LONGCOMMENT, TT.SPACE,
@@ -310,9 +343,9 @@ def build_scope_tree(tokens: List[Token]) -> Scope:
 
                     if has_rhs and names:
                         stmt_end = _find_local_stmt_end(tokens, k + 1, n)
-                        pending_local.extend(names)
-                        pending_scope = current
-                        pending_trigger = stmt_end
+                        pending_stack.append(
+                            _PendingLocalFrame(names=list(names), scope=current, trigger=stmt_end)
+                        )
                     else:
                         for pname, pidx in names:
                             current.declare(pname, pidx)
@@ -438,10 +471,10 @@ def build_scope_tree(tokens: List[Token]) -> Scope:
         i += 1
 
     # Flush any pending declarations left over from an unterminated final statement.
-    if pending_trigger is not None:
-        for pname, pidx in pending_local:
-            pending_scope.declare(pname, pidx, visible_from=pending_trigger)
-        pending_local.clear()
+    while pending_stack:
+        frame = pending_stack.pop()
+        for pname, pidx in frame.names:
+            frame.scope.declare(pname, pidx, visible_from=frame.trigger)
 
     root.end_idx = n
     return root
