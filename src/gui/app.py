@@ -104,6 +104,7 @@ class VladgeMinifierApp(_BaseApp):
         self._inline_functions = ctk.BooleanVar(value=False)
         self._addon_mode = ctk.BooleanVar(value=False)
         self._drop_locals = ctk.BooleanVar(value=False)
+        self._safe_props = ctk.BooleanVar(value=False)
         self._is_minifying = False
         # Subsystems
         self._watcher = MinifierFileWatcher(self._on_watch_trigger)
@@ -220,6 +221,7 @@ class VladgeMinifierApp(_BaseApp):
             ],
             [
                 ("Drop locals", self._drop_locals, T.AMBER, None),
+                ("Safe props", self._safe_props, T.AMBER, None),
                 ("Auto-copy", self._auto_copy, T.ACCENT, None),
                 ("Watch file", self._watch_enabled, T.AMBER, self._on_watch_toggle),
             ],
@@ -653,6 +655,7 @@ class VladgeMinifierApp(_BaseApp):
                     multiline=ml,
                     inline_functions=self._inline_functions.get(),
                     addon=self._addon_mode.get(),
+                    safe_props=self._safe_props.get(),
                 )
                 self._last_result = result
                 self._last_source = self._current_file.read_text(encoding="utf-8", errors="replace")

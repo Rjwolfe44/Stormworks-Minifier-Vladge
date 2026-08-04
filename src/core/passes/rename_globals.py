@@ -48,10 +48,19 @@ def _is_protected_prop_or_key(tokens: List[Token], tok: Token, is_prop: bool, is
     return False
 
 
-def rename_globals(tokens: List[Token], existing_globals: set = None, obfuscate: bool = False) -> Tuple[List[Token], int, Dict[str, str], set]:
+def rename_globals(
+    tokens: List[Token],
+    existing_globals: set = None,
+    obfuscate: bool = False,
+    *,
+    rename_props: bool = True,
+) -> Tuple[List[Token], int, Dict[str, str], set]:
     """
-    Renames standalone globals, user table keys, and user property accesses.
+    Renames standalone globals, and optionally user table keys / property accesses.
     Returns: (new_tokens, rename_count, name_map, allocated_names)
+
+    rename_props=False (safe-props / LifeBoat-friendly): only rename free globals,
+    leave ``obj.field`` / ``{ field = }`` identifiers unchanged.
     """
     if existing_globals is None:
         allocated_names = set()
@@ -107,6 +116,10 @@ def rename_globals(tokens: List[Token], existing_globals: set = None, obfuscate:
                     next_i += 1
                 if next_i < n and tokens[next_i].type == TT.OP and tokens[next_i].value == "=":
                     is_key = True
+
+            if (is_prop or is_key) and not rename_props:
+                _pop_scopes_at(i, scope_end, current_scopes, ctx_stack)
+                continue
 
             if _is_protected_prop_or_key(tokens, tok, is_prop, is_key, prev_i):
                 _pop_scopes_at(i, scope_end, current_scopes, ctx_stack)
@@ -175,6 +188,10 @@ def rename_globals(tokens: List[Token], existing_globals: set = None, obfuscate:
                     next_i += 1
                 if next_i < n and new_tokens[next_i].type == TT.OP and new_tokens[next_i].value == "=":
                     is_key = True
+
+            if (is_prop or is_key) and not rename_props:
+                _pop_scopes_at(i, scope_end, current_scopes, ctx_stack)
+                continue
 
             if _is_protected_prop_or_key(new_tokens, tok, is_prop, is_key, prev_i):
                 _pop_scopes_at(i, scope_end, current_scopes, ctx_stack)

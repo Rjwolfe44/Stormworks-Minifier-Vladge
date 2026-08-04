@@ -85,6 +85,29 @@ def test_require_search_hint_in_message():
     assert any("Searched: /proj" in e for e in errs)
 
 
+def test_module_cache_hoisted_as_local(tmp_path: Path):
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    (lib / "mod.lua").write_text("return {ok=1}", encoding="utf-8")
+    out = bundle_requires('local m = require("lib.mod")', tmp_path)
+    assert out.startswith("local __m0;")
+    assert "if not __m0 then __m0 =" in out
+
+
+def test_safe_props_keeps_user_fields():
+    src = (
+        "function onTick()\n"
+        "  local t = { yaw = 1, pitch = 2 }\n"
+        "  output.setNumber(1, t.yaw + t.pitch)\n"
+        "end\n"
+    )
+    result, stats = minify(src, level=3, safe_props=True)
+    assert "yaw" in result and "pitch" in result
+    assert stats.semantic_ok, stats.semantic_errors
+    aggressive, _ = minify(src, level=3, safe_props=False)
+    assert "yaw" not in aggressive
+
+
 def test_minify_with_build_libs(tmp_path: Path):
     mod = tmp_path / "_build" / "libs" / "LifeBoatAPI"
     mod.mkdir(parents=True)
@@ -102,3 +125,4 @@ def test_minify_with_build_libs(tmp_path: Path):
     result, stats = minify(main, level=3, root_dir=str(tmp_path))
     assert "require" not in result
     assert stats.semantic_ok, stats.semantic_errors
+    assert result.startswith("local ")  # hoisted module cache local(s)

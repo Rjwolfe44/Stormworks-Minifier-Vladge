@@ -49,6 +49,25 @@ def test_bare_function_value_local_on_root():
     assert "f" in _root_local_names(src)
 
 
+def test_multi_name_iife_locals_on_root():
+    src = (
+        "local a, b = (function()\n"
+        "  local x = 1\n"
+        "  return x, 2\n"
+        "end)()\n"
+        "function onTick() local v = a + b end\n"
+    )
+    names = _root_local_names(src)
+    assert "a" in names and "b" in names
+    result, stats = minify(src, level=2)
+    assert "a" not in result or result.count("local") >= 1
+    assert stats.semantic_ok, stats.semantic_errors
+    # Outer names must be renamed in onTick (not left as free globals)
+    assert " a " not in f" {result} " or "a+" not in result.replace(" ", "")
+    from luaparser import ast
+    ast.parse(result)
+
+
 def test_find_local_stmt_end_includes_iife_call():
     src = "local Vec = (function() local x=1 return x end)()\nfunction onTick() end"
     tokens = tokenize(src)

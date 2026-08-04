@@ -147,6 +147,7 @@ def minify(
     addon: bool = False,
     library_paths: List[str] | None = None,
     allow_require: bool = False,
+    safe_props: bool = False,
 ) -> tuple[str, MinifyStats]:
     """Minify Lua source at the given optimisation level.
 
@@ -154,6 +155,7 @@ def minify(
     skip property-string packing that targets microcontroller PINs).
     library_paths: extra directories for require() resolution (LifeBoat libs).
     allow_require: do not flag leftover require() as semantic errors.
+    safe_props: at L3+, rename free globals only — keep user ``.field`` / table keys.
     """
     t0 = time.perf_counter()
     # Addon mission UI + debugging: prefer statement breaks when caller left default off.
@@ -196,6 +198,7 @@ def minify(
             addon,
             library_paths,
             allow_require,
+            safe_props,
         )
 
     from .lifeboat_project import discover_library_paths
@@ -286,7 +289,7 @@ def minify(
     if level >= 3:
         from .passes.rename_globals import rename_globals
         tokens, stats.globals_renamed, stats.global_renames_map, allocated_globals = rename_globals(
-            tokens, allocated_globals, obfuscate
+            tokens, allocated_globals, obfuscate, rename_props=not safe_props,
         )
 
     if level >= 4 and not obfuscate:
@@ -378,6 +381,7 @@ def minify(
                 addon=addon,
                 library_paths=library_paths,
                 allow_require=allow_require,
+                safe_props=safe_props,
             )
         if len(current_source) > len(l3_out):
             current_source = l3_out
@@ -413,6 +417,7 @@ def minify_file(
     addon: bool = False,
     library_paths: List[str] | None = None,
     allow_require: bool = False,
+    safe_props: bool = False,
 ) -> tuple[str, MinifyStats]:
     import os
     with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -430,4 +435,5 @@ def minify_file(
         addon=addon,
         library_paths=library_paths,
         allow_require=allow_require,
+        safe_props=safe_props,
     )

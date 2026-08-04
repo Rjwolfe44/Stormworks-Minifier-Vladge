@@ -116,6 +116,7 @@ Useful flags:
 | `--addon` | Mission addon mode (131071 limit + addon safeties) |
 | `--library-path DIR` | Extra `require()` search dir (repeatable). Also auto-scans `_build/libs` and LifeBoat `libraryPaths` in `.vscode/settings.json` |
 | `--allow-require` | Don’t treat leftover `require()` as `[BROKEN]` (escape hatch; MC runtime still has no require) |
+| `--safe-props` | L3+: rename free globals only — keep user `.field` / table keys (safer for metatables) |
 | `--clipboard` | Copy result to clipboard |
 | `--no-save` | Don’t write `_minified/` (great with clipboard) |
 | `--multiline statements\|preserve` | Keep readable line breaks |

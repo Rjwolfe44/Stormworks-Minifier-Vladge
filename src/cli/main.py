@@ -90,7 +90,8 @@ def _write_utf8_no_bom(path: Path, text: str) -> None:
 
 def _batch_worker(args):
     """Worker function for multicore batch processing."""
-    path, level, obfuscate, multiline, inline_functions, lua53_floor, addon, library_paths, allow_require = args
+    (path, level, obfuscate, multiline, inline_functions, lua53_floor, addon,
+     library_paths, allow_require, safe_props) = args
     try:
         result, stats = minify_file(
             str(path), level, obfuscate,
@@ -100,13 +101,14 @@ def _batch_worker(args):
             addon=addon,
             library_paths=library_paths,
             allow_require=allow_require,
+            safe_props=safe_props,
         )
         return path, result, stats, None
     except Exception as e:
         return path, None, None, str(e)
 
 
-def process_single(input_path: Path, level: int, clipboard: bool, no_save: bool, save: str | None, deploy: str | None, quiet: bool, obfuscate: bool, multiline: str = "off", inline_functions: bool = False, lua53_floor: bool = False, addon: bool = False, library_paths: list | None = None, allow_require: bool = False):
+def process_single(input_path: Path, level: int, clipboard: bool, no_save: bool, save: str | None, deploy: str | None, quiet: bool, obfuscate: bool, multiline: str = "off", inline_functions: bool = False, lua53_floor: bool = False, addon: bool = False, library_paths: list | None = None, allow_require: bool = False, safe_props: bool = False):
     """Process a single file."""
     result, stats = minify_file(
         str(input_path), level, obfuscate,
@@ -116,6 +118,7 @@ def process_single(input_path: Path, level: int, clipboard: bool, no_save: bool,
         addon=addon,
         library_paths=library_paths,
         allow_require=allow_require,
+        safe_props=safe_props,
     )
 
     if not quiet:
@@ -161,7 +164,7 @@ def process_single(input_path: Path, level: int, clipboard: bool, no_save: bool,
     return stats
 
 
-def process_batch(folder: Path, level: int, workers: int, deploy: str | None, quiet: bool, obfuscate: bool, multiline: str = "off", inline_functions: bool = False, lua53_floor: bool = False, addon: bool = False, library_paths: list | None = None, allow_require: bool = False):
+def process_batch(folder: Path, level: int, workers: int, deploy: str | None, quiet: bool, obfuscate: bool, multiline: str = "off", inline_functions: bool = False, lua53_floor: bool = False, addon: bool = False, library_paths: list | None = None, allow_require: bool = False, safe_props: bool = False):
     """Batch-process all .lua files in a folder (multicore)."""
     lua_files = list(folder.rglob("*.lua"))
     # Exclude _minified output dirs and _build dirs
@@ -189,7 +192,8 @@ def process_batch(folder: Path, level: int, workers: int, deploy: str | None, qu
     t0 = time.perf_counter()
 
     args = [
-        (f, level, obfuscate, multiline, inline_functions, lua53_floor, addon, library_paths, allow_require)
+        (f, level, obfuscate, multiline, inline_functions, lua53_floor, addon,
+         library_paths, allow_require, safe_props)
         for f in lua_files
     ]
     with ProcessPoolExecutor(max_workers=workers) as executor:
@@ -291,6 +295,9 @@ def main():
     parser.add_argument("--allow-require", action="store_true",
                         help="Do not treat leftover require() as [BROKEN] "
                              "(MC scripts normally cannot call require at runtime)")
+    parser.add_argument("--safe-props", action="store_true",
+                        help="At L3+, rename free globals only — keep user table "
+                             "keys and .field / :method names (safer for metatables)")
     parser.add_argument("--quiet", action="store_true",
                         help="Suppress output")
 
@@ -310,7 +317,7 @@ def main():
             sys.exit(1)
         process_batch(input_path, level, workers, args.deploy, args.quiet, args.obfuscate,
                       args.multiline, args.inline_functions, args.lua53_floor, args.addon,
-                      library_paths, args.allow_require)
+                      library_paths, args.allow_require, args.safe_props)
     else:
         if not input_path.exists():
             print(f"{RED}Error: file not found: {input_path}{RESET}")
@@ -319,7 +326,7 @@ def main():
             print(f"{YELLOW}Warning: {input_path} is not a .lua file{RESET}")
         process_single(input_path, level, args.clipboard, args.no_save, args.save, args.deploy, args.quiet,
                        args.obfuscate, args.multiline, args.inline_functions, args.lua53_floor, args.addon,
-                       library_paths, args.allow_require)
+                       library_paths, args.allow_require, args.safe_props)
 
 
 if __name__ == "__main__":

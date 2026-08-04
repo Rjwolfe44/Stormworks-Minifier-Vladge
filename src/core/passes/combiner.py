@@ -101,8 +101,8 @@ def bundle_requires(
             search_dirs=child_dirs,
         )
 
-        # Cache on a global so duplicate requires share one instance. `if not`
-        # treats false/nil as unloaded; LifeBoat modules return tables.
+        # Cache slot assigned below; hoisted `local __mN` decl is prepended after
+        # the full rewrite so slots are real locals (not free globals).
         wrapped = (
             f"(function() if not {module_id} then {module_id} = (function()\n"
             f"{content}\n"
@@ -110,4 +110,14 @@ def bundle_requires(
         )
         return wrapped
 
-    return REQUIRE_PATTERN.sub(replacer, source)
+    bundled = REQUIRE_PATTERN.sub(replacer, source)
+    if not loaded_files:
+        return bundled
+
+    # Hoist module cache as locals so rename/scope treat them correctly and they
+    # cannot leak as undefined globals after rename_globals.
+    ids = sorted(
+        loaded_files.values(),
+        key=lambda n: int(n[3:]) if isinstance(n, str) and n.startswith("__m") else 0,
+    )
+    return f"local {','.join(ids)};{bundled}"
