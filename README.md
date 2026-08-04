@@ -115,6 +115,7 @@ Useful flags:
 | `--level 1..4` | Minify strength (default 3; default **2** with `--addon`) |
 | `--addon` | Mission addon mode (131071 limit + addon safeties) |
 | `--library-path DIR` | Extra `require()` search dir (repeatable). Also auto-scans `_build/libs` and LifeBoat `libraryPaths` in `.vscode/settings.json` |
+| `--allow-require` | Don’t treat leftover `require()` as `[BROKEN]` (escape hatch; MC runtime still has no require) |
 | `--clipboard` | Copy result to clipboard |
 | `--no-save` | Don’t write `_minified/` (great with clipboard) |
 | `--multiline statements\|preserve` | Keep readable line breaks |

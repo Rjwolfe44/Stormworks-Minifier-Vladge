@@ -146,12 +146,14 @@ def minify(
     lua53_floor: bool = False,
     addon: bool = False,
     library_paths: List[str] | None = None,
+    allow_require: bool = False,
 ) -> tuple[str, MinifyStats]:
     """Minify Lua source at the given optimisation level.
 
     addon=True: mission/addon script mode (131071 char limit, property.* line breaks,
     skip property-string packing that targets microcontroller PINs).
     library_paths: extra directories for require() resolution (LifeBoat libs).
+    allow_require: do not flag leftover require() as semantic errors.
     """
     t0 = time.perf_counter()
     # Addon mission UI + debugging: prefer statement breaks when caller left default off.
@@ -172,13 +174,35 @@ def minify(
     from .passes.sw_runtime import unwrap_pcall
     source, _pcall_unwrapped = unwrap_pcall(source)
 
-    # L4 still compares against a full Aggressive run for the monotonicity
-    # guarantee (Ultimate must never ship larger than Aggressive). Compute L3
-    # after L4 so the hot path builds Ultimate first; both still run today.
+    # L4 monotonicity vs Aggressive: start L3 in a background thread while L4
+    # runs (overlaps parse/validate work; pure-Python still shares the GIL but
+    # avoids ProcessPool fork warnings inside the GUI / pytest).
     unwrapped_source = source
+    l3_future = None
+    l3_executor = None
+    if level == 4:
+        from concurrent.futures import ThreadPoolExecutor
+        l3_executor = ThreadPoolExecutor(max_workers=1)
+        l3_future = l3_executor.submit(
+            minify,
+            unwrapped_source,
+            3,
+            root_dir,
+            obfuscate,
+            drop_locals,
+            multiline,
+            False,
+            lua53_floor,
+            addon,
+            library_paths,
+            allow_require,
+        )
 
+    from .lifeboat_project import discover_library_paths
     from .passes.combiner import bundle_requires
-    source = bundle_requires(source, root_dir, extra_paths=library_paths)
+    search_dirs = discover_library_paths(root_dir, library_paths) if (root_dir or library_paths) else []
+    require_search_hint = ", ".join(str(p) for p in search_dirs[:8]) if search_dirs else None
+    source = bundle_requires(source, root_dir, extra_paths=library_paths, search_dirs=search_dirs or None)
 
     from .passes.section_stripper import strip_dead_sections
     source, stats.sections_stripped = strip_dead_sections(source)
@@ -335,18 +359,26 @@ def minify(
 
     if level == 4:
         # Monotonicity: if Ultimate grew vs Aggressive, keep Aggressive.
-        l3_out, l3_stats = minify(
-            unwrapped_source,
-            level=3,
-            root_dir=root_dir,
-            obfuscate=obfuscate,
-            drop_locals=drop_locals,
-            multiline=multiline,
-            inline_functions=False,
-            lua53_floor=lua53_floor,
-            addon=addon,
-            library_paths=library_paths,
-        )
+        if l3_future is not None:
+            try:
+                l3_out, l3_stats = l3_future.result()
+            finally:
+                if l3_executor is not None:
+                    l3_executor.shutdown(wait=False)
+        else:
+            l3_out, l3_stats = minify(
+                unwrapped_source,
+                level=3,
+                root_dir=root_dir,
+                obfuscate=obfuscate,
+                drop_locals=drop_locals,
+                multiline=multiline,
+                inline_functions=False,
+                lua53_floor=lua53_floor,
+                addon=addon,
+                library_paths=library_paths,
+                allow_require=allow_require,
+            )
         if len(current_source) > len(l3_out):
             current_source = l3_out
             stats = l3_stats
@@ -360,7 +392,12 @@ def minify(
     stats.elapsed_ms = (time.perf_counter() - t0) * 1000
 
     from .validate import validate_minified
-    stats.semantic_errors = validate_minified(current_source, addon=addon)
+    stats.semantic_errors = validate_minified(
+        current_source,
+        addon=addon,
+        allow_require=allow_require,
+        require_search_hint=require_search_hint,
+    )
 
     return current_source, stats
 
@@ -375,6 +412,7 @@ def minify_file(
     lua53_floor: bool = False,
     addon: bool = False,
     library_paths: List[str] | None = None,
+    allow_require: bool = False,
 ) -> tuple[str, MinifyStats]:
     import os
     with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -391,4 +429,5 @@ def minify_file(
         lua53_floor=lua53_floor,
         addon=addon,
         library_paths=library_paths,
+        allow_require=allow_require,
     )

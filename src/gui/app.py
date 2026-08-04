@@ -708,6 +708,20 @@ class VladgeMinifierApp(_BaseApp):
             self._status_badge.configure(
                 text=f"❌ BROKEN: {n_err} semantic error(s)", text_color=T.RED
             )
+            require_errs = [e for e in stats.semantic_errors if "Unresolved require" in e]
+            if require_errs:
+                self._show_toast(
+                    "Unresolved require() — would be nil in Stormworks.\n"
+                    "Use a LifeBoat project folder (_build/libs) or add library paths.\n\n"
+                    + "\n".join(require_errs[:4]),
+                    geometry="520x240",
+                )
+            elif stats.semantic_errors:
+                self._show_toast(
+                    "Semantic errors (do not paste into a vehicle):\n\n"
+                    + "\n".join(stats.semantic_errors[:6]),
+                    geometry="520x240",
+                )
         elif stats.under_limit:
             self._status_badge.configure(
                 text=f"✅ Under {limit:,} limit", text_color=T.GREEN

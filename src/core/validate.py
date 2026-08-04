@@ -29,13 +29,19 @@ def _check_parse(source: str) -> List[str]:
     return []
 
 
-def _check_unresolved_requires(source: str) -> List[str]:
+def _check_unresolved_requires(
+    source: str,
+    *,
+    search_hint: str | None = None,
+) -> List[str]:
     """
     Stormworks microcontroller Lua has no working require() — leftover requires
     after bundling mean the module was not inlined and will be nil at runtime.
     """
     import re
     errors: List[str] = []
+    hint = f" Searched: {search_hint}." if search_hint else ""
+    tip = " Open the .lua file (not paste-only) or pass --library-path."
     for m in re.finditer(
         r"""\brequire\s*(?:\(\s*(['"])([^'"]+)\1\s*\)|(['"])([^'"]+)\3)""",
         source,
@@ -44,17 +50,23 @@ def _check_unresolved_requires(source: str) -> List[str]:
         line_no = source.count("\n", 0, m.start()) + 1
         errors.append(
             f"Line {line_no}: Unresolved require('{mod}') — "
-            f"will be nil in Stormworks (module was not bundled)."
+            f"will be nil in Stormworks (module was not bundled).{hint}{tip}"
         )
     return errors
 
 
-def validate_minified(source: str, *, addon: bool = False) -> List[str]:
+def validate_minified(
+    source: str,
+    *,
+    addon: bool = False,
+    allow_require: bool = False,
+    require_search_hint: str | None = None,
+) -> List[str]:
     """
     Validate minified Lua for semantic corruption.
 
     Returns a list of error messages (empty = OK).
-    addon=True skips the leftover-require check (mission scripts may keep require).
+    addon=True or allow_require=True skips the leftover-require check.
     """
     errors: List[str] = []
 
@@ -67,8 +79,8 @@ def validate_minified(source: str, *, addon: bool = False) -> List[str]:
         errors.append(f"Validation error: {e}")
         return _dedup(errors)
 
-    if not addon:
-        errors.extend(_check_unresolved_requires(source))
+    if not addon and not allow_require:
+        errors.extend(_check_unresolved_requires(source, search_hint=require_search_hint))
 
     # Additionally: SW_GLOBALS.receiver must use a known API property name
     try:

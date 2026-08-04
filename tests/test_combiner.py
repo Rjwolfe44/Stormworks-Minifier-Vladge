@@ -64,12 +64,25 @@ def test_unresolved_require_flagged():
     src = 'local x = require("Missing.Module")\nfunction onTick() end'
     errs = validate_minified(src, addon=False)
     assert any("Unresolved require" in e for e in errs)
+    assert any("Missing.Module" in e for e in errs)
 
 
 def test_unresolved_require_ok_in_addon():
     src = 'local x = require("Missing.Module")\nfunction onTick() end'
     errs = validate_minified(src, addon=True)
     assert not any("Unresolved require" in e for e in errs)
+
+
+def test_allow_require_skips_flag():
+    src = 'local x = require("Missing.Module")\nfunction onTick() end'
+    errs = validate_minified(src, allow_require=True)
+    assert not any("Unresolved require" in e for e in errs)
+
+
+def test_require_search_hint_in_message():
+    src = 'require("Nope")\nfunction onTick() end'
+    errs = validate_minified(src, require_search_hint="/proj, /proj/_build/libs")
+    assert any("Searched: /proj" in e for e in errs)
 
 
 def test_minify_with_build_libs(tmp_path: Path):
