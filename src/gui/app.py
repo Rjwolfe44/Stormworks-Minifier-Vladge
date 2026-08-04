@@ -841,6 +841,7 @@ class VladgeMinifierApp(_BaseApp):
                     result, stats = minify_file(
                         str(path), level, self._obfuscate.get(),
                         addon=self._addon_mode.get(),
+                        safe_props=self._safe_props.get(),
                     )
                     rel = path.relative_to(folder_path)
                     out = out_dir / rel
