@@ -114,6 +114,7 @@ Useful flags:
 |------|---------|
 | `--level 1..4` | Minify strength (default 3; default **2** with `--addon`) |
 | `--addon` | Mission addon mode (131071 limit + addon safeties) |
+| `--library-path DIR` | Extra `require()` search dir (repeatable). Also auto-scans `_build/libs` and LifeBoat `libraryPaths` in `.vscode/settings.json` |
 | `--clipboard` | Copy result to clipboard |
 | `--no-save` | Don’t write `_minified/` (great with clipboard) |
 | `--multiline statements\|preserve` | Keep readable line breaks |
@@ -121,6 +122,22 @@ Useful flags:
 | `--deploy <dir>` | Inject into microcontroller XML / copy out |
 | `--batch` | Process a whole folder |
 | `--quiet` | Stats off |
+
+---
+
+## LifeBoat / VS Code projects
+
+VladgeMinifier understands LifeBoat-style projects:
+
+- **`require("Folder.File")`** is inlined (combiner) using search paths:
+  - project root, `lib/`, `src/`
+  - `_build/libs/` (and each child folder)
+  - `lifeboatapi.stormworks.libs.libraryPaths` from `.vscode/settings.json`
+  - any `--library-path` you pass on the CLI
+- **`---@section` / `---@endsection`** redundancy stripping (including `__LB_SIMULATOR_ONLY__`)
+- Unresolved `require(...)` after bundling is **`[BROKEN]`** for microcontroller scripts (would be nil in-game)
+
+Prefer **Install to Editor** / CLI minify of the source file (not clipboard-paste of unfinished modular code) so library paths resolve.
 
 ---
 
