@@ -173,6 +173,11 @@ SW_API_PROPERTIES = frozenset({
     "wrap", "write", "x", "y", "yield", "z",
 })
 
+# Receivers that live in SW_GLOBALS so free-global rename won't touch them, but
+# are NOT Stormworks/Lua API tables. Property access on these is user data and
+# must rename in sync with `{ field = }` keys (PID `self.prevErr`, etc.).
+SW_META_RECEIVERS = frozenset({"self"})
+
 # Lua metamethod / metatable field names — valid on any table including `self`.
 # Must not be flagged as renamed SW API properties (`self.__index = self`).
 LUA_METAMETHODS = frozenset({

@@ -8,13 +8,14 @@ do not report size-only [OK] when the output would crash in-game.
 from __future__ import annotations
 from typing import List
 
-from .lexer import Token, TT, SW_GLOBALS, SW_API_PROPERTIES, LUA_KEYWORDS, LUA_METAMETHODS, tokenize
+from .lexer import (
+    Token, TT, SW_GLOBALS, SW_API_PROPERTIES, LUA_KEYWORDS, LUA_METAMETHODS,
+    SW_META_RECEIVERS, tokenize,
+)
 from .linter import lint_script
 
 # Engine-owned tables with arbitrary user keys — not SW API property surfaces.
 _SW_USER_DATA_TABLES = frozenset({"g_savedata"})
-# Receivers that are Lua OO / metatable conventions, not Stormworks API tables.
-_SW_META_RECEIVERS = frozenset({"self"})
 # Properties that are always legal on SW_GLOBALS receivers (stdlib + metamethods).
 _ALLOWED_PROPS = SW_API_PROPERTIES | LUA_METAMETHODS | LUA_KEYWORDS
 
@@ -108,7 +109,7 @@ def validate_minified(
 
         recv = tokens[recv_i].value
         prop = tok.value
-        if recv in _SW_META_RECEIVERS:
+        if recv in SW_META_RECEIVERS:
             continue
         if (
             recv in SW_GLOBALS
