@@ -344,6 +344,40 @@ class TestWhitespaceSafety:
         assert "property.getBool" in result
         assert "useDiscrete" in result
 
+    def test_pcall_in_expression_keeps_parsing(self):
+        """`local ok = pcall(function() ... end)` used to become `local ok=t.p=1`."""
+        from tests.helpers_verify import verify_minified
+        for src in (
+            "local t={}\nlocal ok = pcall(function() t.p = 1 t.q = 2 end)\nprint(ok)",
+            "if pcall(function() return 1 end) then print(1) end",
+            "local ok, v = xpcall(function() return 2 end, print)\nprint(ok, v)",
+        ):
+            for level in (1, 2, 3, 4):
+                result, stats = minify(src, level=level)
+                assert stats.semantic_ok, (level, src, stats.semantic_errors)
+                assert not verify_minified(result), (level, result)
+
+    def test_pcall_unwrap_keeps_body_locals_scoped(self):
+        src = "x=1\npcall(function() local x = 5 print(x) end)\nprint(x)"
+        result, _ = minify(src, level=1)
+        assert "pcall" not in result
+        assert "do local x=5" in result  # the inner x must not shadow the outer one
+
+    def test_pcall_method_and_field_untouched(self):
+        src = "local o={pcall=function() end}\no.pcall(function() end)\no:pcall(1)"
+        result, _ = minify(src, level=1)
+        assert "o.pcall(function()end)" in result and "o:pcall(1)" in result
+        assert "local function pcall" not in result
+
+    def test_number_before_concat_keeps_space(self):
+        """`b+1 .. ""` glued to `1..""` is a malformed number in Lua (Dual Radar GPS v2)."""
+        from tests.helpers_verify import verify_minified
+        src = 'local b=2\nprint(b+1 .. "", 2.5 .. "x")'
+        for mode in (False, "statements", "preserve"):
+            result, stats = minify(src, level=2, multiline=mode)
+            assert '1..' not in result and '2.5..' not in result, result
+            assert not verify_minified(result), result
+
     def test_elseif_preserved_and_binds_correctly(self):
         """Trailing else must stay sibling to the elseif chain, not rebind inward."""
         src = (
